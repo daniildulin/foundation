@@ -35,6 +35,9 @@ type GRPCServerOptions struct {
 
 	// StartComponentsOptions are the options to start the components.
 	StartComponentsOptions []StartComponentsOption
+
+	// Custom GRPC unary interceptors
+	CustomUnaryInterceptors []grpc.UnaryServerInterceptor
 }
 
 func NewGRPCServerOptions() *GRPCServerOptions {
@@ -64,7 +67,7 @@ func (s *GRPCServer) ServiceFunc(ctx context.Context) error {
 
 	// Construct the default server options
 	defaultOptions := []grpc.ServerOption{
-		grpc.ChainUnaryInterceptor(defaultInterceptors...),
+		grpc.ChainUnaryInterceptor(append(defaultInterceptors, s.Options.CustomUnaryInterceptors...)...),
 	}
 
 	// Prepend the default server options in front of the application-defined ones
