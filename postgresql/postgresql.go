@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
@@ -218,4 +219,84 @@ func NewNullUUID(uuidStr *string) uuid.NullUUID {
 	}
 
 	return result
+}
+
+//
+// pgtype helpers
+//
+// The helpers above return database/sql null types, which is the wrong family
+// for this project: sqlc.yaml configures sql_package "pgx/v5", so generated
+// code takes pgtype values. Converting between the two at every call site is
+// exactly the busywork these helpers exist to remove. The database/sql versions
+// are kept for callers that already use them.
+//
+
+// NewPgTimestamptzFromPb converts a protobuf timestamp to a pgtype value.
+func NewPgTimestamptzFromPb(timestamp *timestamppb.Timestamp) pgtype.Timestamptz {
+	if timestamp == nil || !timestamp.IsValid() {
+		return pgtype.Timestamptz{}
+	}
+
+	return pgtype.Timestamptz{Time: timestamp.AsTime(), Valid: true}
+}
+
+// NewPgTimestamptz converts a time to a pgtype value, treating the zero time as
+// NULL.
+func NewPgTimestamptz(value time.Time) pgtype.Timestamptz {
+	if value.IsZero() {
+		return pgtype.Timestamptz{}
+	}
+
+	return pgtype.Timestamptz{Time: value, Valid: true}
+}
+
+// NewPgText converts an optional string to a pgtype value.
+func NewPgText(value *string) pgtype.Text {
+	if value == nil {
+		return pgtype.Text{}
+	}
+
+	return pgtype.Text{String: *value, Valid: true}
+}
+
+// NewPgInt4 converts an optional int32 to a pgtype value.
+func NewPgInt4(value *int32) pgtype.Int4 {
+	if value == nil {
+		return pgtype.Int4{}
+	}
+
+	return pgtype.Int4{Int32: *value, Valid: true}
+}
+
+// NewPgInt8 converts an optional int64 to a pgtype value.
+func NewPgInt8(value *int64) pgtype.Int8 {
+	if value == nil {
+		return pgtype.Int8{}
+	}
+
+	return pgtype.Int8{Int64: *value, Valid: true}
+}
+
+// NewPgBool converts an optional bool to a pgtype value.
+func NewPgBool(value *bool) pgtype.Bool {
+	if value == nil {
+		return pgtype.Bool{}
+	}
+
+	return pgtype.Bool{Bool: *value, Valid: true}
+}
+
+// NewPgUUID converts an optional UUID string to a pgtype value. An unparsable
+// value is treated as NULL.
+func NewPgUUID(value *string) pgtype.UUID {
+	if value == nil {
+		return pgtype.UUID{}
+	}
+
+	parsed, err := uuid.Parse(*value)
+	if err != nil {
+		return pgtype.UUID{}
+	}
+
+	return pgtype.UUID{Bytes: parsed, Valid: true}
 }

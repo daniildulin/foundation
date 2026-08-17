@@ -3,6 +3,7 @@ package postgresql
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
@@ -112,4 +113,41 @@ func TestPoolStatsCollectorIsSafeBeforeStart(t *testing.T) {
 func TestTracingIsEnabledByDefault(t *testing.T) {
 	assert.True(t, NewComponent().tracingEnabled)
 	assert.False(t, NewComponent(WithTracing(false)).tracingEnabled)
+}
+
+// sqlc is configured with sql_package "pgx/v5", so generated code takes pgtype
+// values; the database/sql helpers were the wrong family for this project and
+// left callers converting by hand.
+func TestPgTypeHelpers(t *testing.T) {
+	assert.False(t, NewPgTimestamptzFromPb(nil).Valid)
+	assert.True(t, NewPgTimestamptzFromPb(timestamppb.New(time.Unix(1, 0))).Valid)
+
+	assert.False(t, NewPgTimestamptz(time.Time{}).Valid)
+	assert.True(t, NewPgTimestamptz(time.Unix(1, 0)).Valid)
+
+	assert.False(t, NewPgText(nil).Valid)
+	assert.False(t, NewPgInt4(nil).Valid)
+	assert.False(t, NewPgInt8(nil).Valid)
+	assert.False(t, NewPgBool(nil).Valid)
+	assert.False(t, NewPgUUID(nil).Valid)
+
+	str := "value"
+	i32 := int32(1)
+	i64 := int64(2)
+	flag := false
+	id := "0f8fad5b-d9cb-469f-a165-70867728950e"
+	bad := "not-a-uuid"
+
+	assert.Equal(t, "value", NewPgText(&str).String)
+	assert.True(t, NewPgText(&str).Valid)
+	assert.Equal(t, int32(1), NewPgInt4(&i32).Int32)
+	assert.Equal(t, int64(2), NewPgInt8(&i64).Int64)
+
+	// A pointer to false is a value, not an absence.
+	pgBool := NewPgBool(&flag)
+	assert.True(t, pgBool.Valid)
+	assert.False(t, pgBool.Bool)
+
+	assert.True(t, NewPgUUID(&id).Valid)
+	assert.False(t, NewPgUUID(&bad).Valid, "an unparsable UUID is NULL, not a corrupt value")
 }
