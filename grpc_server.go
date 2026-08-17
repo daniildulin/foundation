@@ -103,6 +103,10 @@ func (s *GRPCServer) ServiceFunc(ctx context.Context) error {
 	return nil
 }
 
+// grpcForcedStopGrace is how long a forced Stop is given to unwind before the
+// shutdown moves on without it. It is a variable so that tests can shorten it.
+var grpcForcedStopGrace = 5 * time.Second
+
 // stopGRPCServer stops a gRPC server gracefully, falling back to a hard stop
 // when in-flight calls do not finish within the shutdown budget.
 //
@@ -127,7 +131,20 @@ func (s *Service) stopGRPCServer(server *grpc.Server) {
 	case <-timer.C:
 		s.Logger.Warnf("gRPC server did not stop gracefully within %s; forcing it", timeout)
 		server.Stop()
-		<-stopped
+
+		// Stop closes the listeners and the transports, but it cannot make a
+		// handler that ignores its context return — and GracefulStop only
+		// returns once every handler has. Waiting unconditionally would hand
+		// the rest of the shutdown, Sentry flush included, to a single wedged
+		// handler.
+		grace := time.NewTimer(grpcForcedStopGrace)
+		defer grace.Stop()
+
+		select {
+		case <-stopped:
+		case <-grace.C:
+			s.Logger.Error("gRPC handlers did not return; continuing the shutdown regardless")
+		}
 	}
 }
 

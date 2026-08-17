@@ -169,3 +169,17 @@ func TestGetUniqueStrings(t *testing.T) {
 	assert.Empty(t, getUniqueStrings(nil))
 	assert.Equal(t, 1, strings.Count(strings.Join(getUniqueStrings([]string{"a", "a"}), ","), "a"))
 }
+
+// The comparison is case-insensitive but the browser's check of
+// Access-Control-Allow-Origin is not, so echoing the configured spelling made
+// the browser reject a request the gateway had allowed — with no 403 in the
+// logs to explain it.
+func TestCORSEchoesTheRequestOriginSpelling(t *testing.T) {
+	options := NewCORSOptions()
+	options.AllowedOrigins = []string{"https://App.Example.com"}
+
+	rec := preflight(t, options, "https://app.example.com")
+
+	assert.Equal(t, http.StatusNoContent, rec.Code)
+	assert.Equal(t, "https://app.example.com", rec.Header().Get(fhttp.HeaderAccessControlAllowOrigin))
+}

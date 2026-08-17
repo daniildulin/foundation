@@ -31,6 +31,17 @@ func (q *Queries) CreateOutboxEvent(ctx context.Context, arg CreateOutboxEventPa
 	return err
 }
 
+const countOutboxEvents = `-- name: CountOutboxEvents :one
+SELECT COUNT(*) FROM foundation_outbox_events
+`
+
+func (q *Queries) CountOutboxEvents(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countOutboxEvents)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const deleteOutboxEvents = `-- name: DeleteOutboxEvents :exec
 DELETE FROM foundation_outbox_events WHERE id = ANY($1::bigint[])
 `

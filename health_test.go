@@ -240,3 +240,25 @@ func TestMetricsServerToleratesMissingProbeHandlers(t *testing.T) {
 func TestMetricsServerHasAReadHeaderTimeout(t *testing.T) {
 	assert.Positive(t, NewMetricsServerComponent().server.ReadHeaderTimeout)
 }
+
+// A shared deadline across a sequential loop meant the first slow component
+// consumed it and every component after that was reported down with "context
+// deadline exceeded" — one unreachable database accused Redis and Kafka too.
+func TestReadinessIsolatesASlowComponent(t *testing.T) {
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+
+	svc := newHealthTestService(
+		&hangingComponent{fakeComponent: fakeComponent{name: "slow"}, release: release},
+		&fakeComponent{name: "redis"},
+		&fakeComponent{name: "kafka-consumer"},
+	)
+	svc.Config.HealthCheckTimeout = 30 * time.Millisecond
+
+	code, status := probe(t, svc.readinessHandler)
+
+	assert.Equal(t, http.StatusServiceUnavailable, code)
+	assert.Contains(t, status.Components, "slow")
+	assert.NotContains(t, status.Components, "redis", "a healthy component must not be blamed for a slow one")
+	assert.NotContains(t, status.Components, "kafka-consumer")
+}

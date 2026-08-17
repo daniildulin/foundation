@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os/signal"
 	"runtime/debug"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -39,16 +41,25 @@ func versionFromBuildInfo(fallback string) string {
 	}
 
 	if info.Main.Path == modulePath && info.Main.Version != "" && info.Main.Version != "(devel)" {
-		return info.Main.Version
+		return normalizeVersion(info.Main.Version)
 	}
 
 	for _, dep := range info.Deps {
 		if dep.Path == modulePath && dep.Version != "" {
-			return dep.Version
+			return normalizeVersion(dep.Version)
 		}
 	}
 
 	return fallback
+}
+
+// normalizeVersion drops the leading "v" module versions carry.
+//
+// Everything that prints Version already adds its own — the startup banner says
+// "Foundation: v%s" — so passing "v0.3.0" straight through produced "vv0.3.0"
+// and a version label inconsistent with what the same code emitted before.
+func normalizeVersion(version string) string {
+	return strings.TrimPrefix(version, "v")
 }
 
 // modulePath is this module's import path.
@@ -71,7 +82,13 @@ type Service struct {
 	Config     *Config
 	Components []Component
 	ModeName   string
-	cancelFunc context.CancelFunc
+
+	// stopRequested is closed by Shutdown. It replaces a cancelFunc field that
+	// Start assigned and other goroutines read — a data race, and a silent
+	// no-op for anything that called Shutdown before Start got that far.
+	stopRequestedOnce sync.Once
+	stopOnce          sync.Once
+	stopRequested     chan struct{}
 
 	// draining is set once shutdown begins, so that the readiness probe can
 	// report the service as unavailable before anything is torn down.
@@ -185,10 +202,15 @@ type KafkaConsumerConfig struct {
 type KafkaProducerConfig struct {
 	Enabled   bool
 	BatchSize int
-	// BatchTimeout is how long the writer waits for a batch to fill before
-	// sending it. Accepts a duration (`50ms`); a bare number is read as
-	// seconds, as it was before.
-	BatchTimeout time.Duration
+	// BatchFlushInterval is how long the writer waits for a batch to fill
+	// before sending it. Accepts a duration (`50ms`); a bare number in the
+	// environment is read as seconds, as it was before.
+	//
+	// It replaces a `BatchTimeout int` field that meant seconds. Renaming it
+	// rather than changing its type is deliberate: `BatchTimeout = 5` would
+	// still have compiled against a time.Duration and quietly become five
+	// nanoseconds, turning off batching with no error and no log line.
+	BatchFlushInterval time.Duration
 	// AllowAutoTopicCreation lets a write to an unknown topic create it.
 	// Defaults to true outside production, where a typo in a topic name should
 	// fail rather than quietly create a topic.
@@ -264,7 +286,7 @@ func NewConfig() *Config {
 			Producer: &KafkaProducerConfig{
 				Enabled:                false,
 				BatchSize:              GetEnvOrInt("KAFKA_PRODUCER_BATCH_SIZE", 1),
-				BatchTimeout:           GetEnvOrDurationSeconds("KAFKA_PRODUCER_BATCH_TIMEOUT", time.Second),
+				BatchFlushInterval:     GetEnvOrDurationSeconds("KAFKA_PRODUCER_BATCH_TIMEOUT", time.Second),
 				AllowAutoTopicCreation: GetEnvOrBool("KAFKA_ALLOW_AUTO_TOPIC_CREATION", !IsProductionEnv()),
 			},
 			TLSDir: GetEnvOrString("KAFKA_TLS_DIR", ""),
@@ -437,7 +459,7 @@ func (s *Service) addSystemComponents() error {
 			fkafka.WithProducerLogger(s.Logger),
 			fkafka.WithProducerTLSDir(s.Config.Kafka.TLSDir),
 			fkafka.WithProducerBatchSize(s.Config.Kafka.Producer.BatchSize),
-			fkafka.WithProducerBatchTimeout(s.Config.Kafka.Producer.BatchTimeout),
+			fkafka.WithProducerBatchTimeout(s.Config.Kafka.Producer.BatchFlushInterval),
 			fkafka.WithProducerAllowAutoTopicCreation(s.Config.Kafka.Producer.AllowAutoTopicCreation),
 		}
 
@@ -463,6 +485,7 @@ func (s *Service) addSystemComponents() error {
 			WithMetricsServerReadinessHandler(s.readinessHandler),
 			WithMetricsServerLogger(s.Logger),
 			WithMetricsServerPort(s.Config.Metrics.Port),
+			WithMetricsServerHTTPConfig(s.httpConfig()),
 		))
 	}
 
@@ -526,12 +549,38 @@ func (s *Service) StartComponents(opts ...StartComponentsOption) error {
 	return nil
 }
 
-// Shutdown asks the service to begin a graceful shutdown, as if it had received
-// SIGTERM. It is safe to call before Start and to call more than once.
+// stopSignal returns the channel closed when a shutdown is requested.
+func (s *Service) stopSignal() <-chan struct{} {
+	s.stopRequestedOnce.Do(func() {
+		s.stopRequested = make(chan struct{})
+	})
+
+	return s.stopRequested
+}
+
+// Shutdown asks the service to stop.
+//
+// Unlike SIGTERM it does not go through the drain delay: a programmatic
+// shutdown is a decision the service has already made — an events worker with
+// ShutdownOnError hitting a message it must not skip past, for instance — and
+// waiting out a delay meant for load balancers would let it keep doing the very
+// thing it stopped for.
+//
+// It is safe to call before Start and to call more than once.
 func (s *Service) Shutdown() {
-	if s.cancelFunc != nil {
-		s.cancelFunc()
-	}
+	s.stopRequestedOnce.Do(func() {
+		s.stopRequested = make(chan struct{})
+	})
+
+	s.stopOnce.Do(func() {
+		close(s.stopRequested)
+	})
+}
+
+// beginDraining marks the service unavailable to the readiness probe.
+func (s *Service) beginDraining() {
+	s.draining.Store(true)
+	fmetrics.SetDraining(true)
 }
 
 // StopComponents stops the default Foundation service components.
@@ -627,8 +676,6 @@ func (s *Service) Start(opts *StartOptions) {
 	signalCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	s.cancelFunc = stop
-
 	// The service context lags the signal by the drain delay. Readiness starts
 	// failing the moment the signal arrives, but servers keep accepting for a
 	// little longer, so that load balancers notice before connections are
@@ -637,14 +684,25 @@ func (s *Service) Start(opts *StartOptions) {
 	defer stopServing()
 
 	go func() {
-		<-signalCtx.Done()
+		select {
+		case <-signalCtx.Done():
+			s.beginDraining()
 
-		s.draining.Store(true)
-		fmetrics.SetDraining(true)
+			// A programmatic Shutdown during the drain cuts it short.
+			if delay := s.drainDelay(); delay > 0 {
+				s.Logger.Infof("Draining for %s before shutting down", delay)
 
-		if delay := s.drainDelay(); delay > 0 {
-			s.Logger.Infof("Draining for %s before shutting down", delay)
-			time.Sleep(delay)
+				timer := time.NewTimer(delay)
+				defer timer.Stop()
+
+				select {
+				case <-timer.C:
+				case <-s.stopSignal():
+				}
+			}
+		case <-s.stopSignal():
+			// Requested from inside the service: stop now.
+			s.beginDraining()
 		}
 
 		stopServing()

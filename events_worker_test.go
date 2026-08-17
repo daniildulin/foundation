@@ -28,13 +28,25 @@ func (h *recordingHandler) Handle(context.Context, *Event, proto.Message) ([]*Ev
 	return nil, h.err
 }
 
-func newTestEventsWorker(t *testing.T, handlers map[proto.Message][]EventHandler) (*EventsWorker, *bool) {
+// shutdownProbe reports whether Shutdown has been called on a service.
+type shutdownProbe struct {
+	service *Service
+}
+
+func (p shutdownProbe) called() bool {
+	select {
+	case <-p.service.stopSignal():
+		return true
+	default:
+		return false
+	}
+}
+
+func newTestEventsWorker(t *testing.T, handlers map[proto.Message][]EventHandler) (*EventsWorker, shutdownProbe) {
 	t.Helper()
 
 	logger := logrus.New()
 	logger.SetOutput(io.Discard)
-
-	shutdownCalled := false
 
 	svc := &Service{
 		Name: "test",
@@ -43,8 +55,7 @@ func newTestEventsWorker(t *testing.T, handlers map[proto.Message][]EventHandler
 			Outbox:   &OutboxConfig{},
 			Sentry:   &SentryConfig{},
 		},
-		Logger:     logrus.NewEntry(logger),
-		cancelFunc: func() { shutdownCalled = true },
+		Logger: logrus.NewEntry(logger),
 	}
 
 	registry, err := (&EventsWorkerOptions{Handlers: handlers}).Registry()
@@ -53,7 +64,7 @@ func newTestEventsWorker(t *testing.T, handlers map[proto.Message][]EventHandler
 	return &EventsWorker{
 		SpinWorker: &SpinWorker{Service: svc},
 		registry:   registry,
-	}, &shutdownCalled
+	}, shutdownProbe{service: svc}
 }
 
 func newTestMessage(t *testing.T, msg proto.Message, headers map[string]string) kafka.Message {
@@ -95,7 +106,7 @@ func TestHandleMessageCommitsHandledEvent(t *testing.T) {
 	assert.True(t, shouldCommit)
 	assert.Nil(t, err)
 	assert.Equal(t, 1, handler.calls)
-	assert.False(t, *shutdown)
+	assert.False(t, shutdown.called())
 }
 
 // A worker subscribes to whole topics, so it constantly reads event types it
@@ -113,7 +124,7 @@ func TestHandleMessageCommitsEventWithoutHandlers(t *testing.T) {
 
 	assert.True(t, shouldCommit, "an unhandled event must still advance the committed offset")
 	assert.Nil(t, err)
-	assert.False(t, *shutdown)
+	assert.False(t, shutdown.called())
 }
 
 func TestHandleMessageCommitsEventWithoutProtoNameHeader(t *testing.T) {
@@ -149,7 +160,7 @@ func TestHandleMessageCommitsUnparsablePayload(t *testing.T) {
 	// caller, and whoever reads it needs to know what to re-drive.
 	assert.Contains(t, err.Error(), "foundation.errors/0 offset 42")
 	assert.Equal(t, 0, handler.calls)
-	assert.False(t, *shutdown)
+	assert.False(t, shutdown.called())
 }
 
 func TestHandleMessageShutsDownOnUnparsablePayloadWhenAsked(t *testing.T) {
@@ -165,7 +176,7 @@ func TestHandleMessageShutsDownOnUnparsablePayloadWhenAsked(t *testing.T) {
 
 	assert.False(t, shouldCommit, "ShutdownOnError must leave the offset for investigation")
 	assert.NotNil(t, err)
-	assert.True(t, *shutdown)
+	assert.True(t, shutdown.called())
 }
 
 func TestHandleMessageCommitsAfterHandlerErrorByDefault(t *testing.T) {
@@ -182,7 +193,7 @@ func TestHandleMessageCommitsAfterHandlerErrorByDefault(t *testing.T) {
 	assert.True(t, shouldCommit)
 	assert.NotNil(t, err)
 	assert.Equal(t, 1, handler.calls)
-	assert.False(t, *shutdown)
+	assert.False(t, shutdown.called())
 }
 
 func TestHandleMessageShutsDownOnHandlerError(t *testing.T) {
@@ -198,7 +209,7 @@ func TestHandleMessageShutsDownOnHandlerError(t *testing.T) {
 
 	assert.False(t, shouldCommit)
 	assert.NotNil(t, err)
-	assert.True(t, *shutdown)
+	assert.True(t, shutdown.called())
 }
 
 // The first failing handler stops the chain.

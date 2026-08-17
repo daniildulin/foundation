@@ -149,7 +149,12 @@ func (r *resolved) allows(origin string) (string, bool) {
 
 	for _, allowed := range r.origins {
 		if strings.EqualFold(allowed, origin) {
-			return allowed, true
+			// Echo what the browser sent, not how it was configured: the
+			// comparison is case-insensitive but the browser's check of
+			// Access-Control-Allow-Origin is not, so answering with a
+			// differently-cased spelling fails the request with no 403 to
+			// explain it.
+			return origin, true
 		}
 	}
 

@@ -45,7 +45,8 @@ Applied to the gateway, the HTTP server mode and the metrics server.
   comfortably more than `GatewayOptions.Timeout`.
 - `HTTP_MAX_REQUEST_BODY_SIZE`: Maximum request body in bytes. Default: `33554432` (32 MiB), `0` disables the cap.
   grpc-gateway unmarshals the whole body into a protobuf message, so an
-  unbounded body is an unbounded allocation.
+  unbounded body is an unbounded allocation. Applies to the gateway and the HTTP
+  server mode; the metrics server serves no request bodies.
 
 ## Authentication
 
@@ -94,6 +95,13 @@ The following environment variables are only applicable when running in `events_
 
 - `EVENTS_WORKER_ERRORS_TOPIC`: The Kafka topic handler errors are published to. Default: empty, meaning the topic is derived from the error's proto name like any other event, which puts Foundation errors on `foundation.errors`.
 - `EVENTS_WORKER_DELIVER_ERRORS`: Whether handler errors are published back to the originator of the request. Default: `true`.
+
+## Outbox Courier
+
+> **Ordering.** Several courier replicas can run at once — each takes a batch
+> nobody else holds — but that costs ordering: a replica skips rows another has
+> locked, so two events for the same key can reach Kafka out of order, on the
+> same partition. Run a single courier where per-key ordering matters.
 
 ## Jobs Worker
 

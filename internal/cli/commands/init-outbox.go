@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"log"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -73,7 +74,10 @@ func copyOutboxMigrations(dir, timestamp string) ([]string, error) {
 			continue
 		}
 
-		content, err := fs.ReadFile(outboxrepo.Migrations, filepath.Join(outboxrepo.MigrationsDir, entry.Name()))
+		// path.Join, not filepath.Join: an embed.FS is always addressed with
+		// forward slashes, so building the path with the OS separator made
+		// every read fail on Windows.
+		content, err := fs.ReadFile(outboxrepo.Migrations, path.Join(outboxrepo.MigrationsDir, entry.Name()))
 		if err != nil {
 			return nil, fmt.Errorf("failed to read %s: %w", entry.Name(), err)
 		}

@@ -75,13 +75,27 @@ func (opts *CableCourierOptions) EventHandlers(s *Service) map[proto.Message][]E
 		&ferrpb.InvalidArgumentError{},
 	}
 
-	// Add default resolvers for errors, if not already defined
+	// Add default resolvers for the error types the caller has not covered.
+	//
+	// The check has to be by proto name, not by map key. The keys here are
+	// pointers, so a caller who registered their own `&ferrpb.InternalError{}`
+	// holds a different key from the one built above: looking up by key missed
+	// it and added a second entry for the same event type. That used to mean
+	// one of the two resolvers was silently dropped; now that the events worker
+	// rejects duplicate registrations, it would stop the courier from starting
+	// at all.
+	registered := make(map[string]bool, len(opts.Resolvers))
+	for protoObj := range opts.Resolvers {
+		registered[ProtoToName(protoObj)] = true
+	}
+
 	for _, err := range errors {
-		if _, ok := opts.Resolvers[err]; !ok {
-			opts.Resolvers[err] = []CableMessageResolver{
-				CableDefaultErrorResolver,
-			}
+		if registered[ProtoToName(err)] {
+			continue
 		}
+
+		opts.Resolvers[err] = []CableMessageResolver{CableDefaultErrorResolver}
+		registered[ProtoToName(err)] = true
 	}
 
 	// Wrap resolvers into event handlers

@@ -27,6 +27,37 @@ type routeHolderKey struct{}
 // endpoints served by middleware such as swagger.
 const unmatchedRoute = "unmatched"
 
+// otherMethod collects request methods outside the standard set.
+const otherMethod = "OTHER"
+
+// knownMethods bounds the `method` label.
+//
+// net/http accepts any RFC 7230 token as a method, so labelling by r.Method
+// directly lets a client mint a new counter and a new histogram — thirteen
+// series — per request, held for the life of the process. That is the same
+// unbounded-cardinality hole the route label exists to close, left open on the
+// other axis.
+var knownMethods = map[string]bool{
+	http.MethodGet:     true,
+	http.MethodHead:    true,
+	http.MethodPost:    true,
+	http.MethodPut:     true,
+	http.MethodPatch:   true,
+	http.MethodDelete:  true,
+	http.MethodConnect: true,
+	http.MethodOptions: true,
+	http.MethodTrace:   true,
+}
+
+// methodLabel maps a request method onto the bounded label set.
+func methodLabel(method string) string {
+	if knownMethods[method] {
+		return method
+	}
+
+	return otherMethod
+}
+
 // RouteAnnotator records the route pattern grpc-gateway matched, so that HTTP
 // metrics can be labelled by route rather than by request path.
 //
@@ -69,12 +100,13 @@ func WithMetrics(next http.Handler) http.Handler {
 		// The annotator has run by now, on this goroutine, so reading the
 		// holder needs no synchronisation.
 		route := holder.route
+		method := methodLabel(r.Method)
 
 		// The server span was opened before routing, so it could only be named
 		// after the method. Now that the route is known, say so — a trace list
 		// of bare "GET" is not much use.
 		if span := trace.SpanFromContext(r.Context()); span.IsRecording() {
-			span.SetName(r.Method + " " + route)
+			span.SetName(method + " " + route)
 			span.SetAttributes(
 				attribute.String("http.route", route),
 				attribute.Int("http.status_code", lrw.Status()),
@@ -82,11 +114,11 @@ func WithMetrics(next http.Handler) http.Handler {
 		}
 
 		fmetrics.HTTPRequests.
-			WithLabelValues(r.Method, route, strconv.Itoa(lrw.statusCode)).
+			WithLabelValues(method, route, strconv.Itoa(lrw.Status())).
 			Inc()
 
 		fmetrics.HTTPRequestDuration.
-			WithLabelValues(r.Method, route).
+			WithLabelValues(method, route).
 			Observe(time.Since(started).Seconds())
 	})
 }

@@ -107,7 +107,14 @@ func (w *JobsWorker) ServiceFunc(ctx context.Context) error {
 	}
 	defer redisPool.Close() //nolint:errcheck // best effort on shutdown
 
-	workerPool := work.NewWorkerPool(jobsWorkerContext{}, uint(w.Options.Concurrency), w.Options.Namespace, redisPool)
+	// Guarded above, but spelled out so that the conversion is safe by
+	// construction rather than by an analyser's inference.
+	concurrency := uint(0)
+	if w.Options.Concurrency > 0 {
+		concurrency = uint(w.Options.Concurrency)
+	}
+
+	workerPool := work.NewWorkerPool(jobsWorkerContext{}, concurrency, w.Options.Namespace, redisPool)
 
 	workerPool.Middleware(w.LoggingMiddleware)
 

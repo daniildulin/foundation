@@ -233,6 +233,22 @@ func (s *Service) ListOutboxEvents(ctx context.Context, tx pgx.Tx, limit int32) 
 	return events, nil
 }
 
+// CountOutboxEvents returns how many events are waiting in the outbox.
+//
+// This is the number worth alerting on: the size of a batch can never exceed
+// the limit it was read with, so it says nothing about how far behind the
+// courier has fallen.
+func (s *Service) CountOutboxEvents(ctx context.Context, tx pgx.Tx) (int64, ferr.FoundationError) {
+	queries := outboxrepo.New(tx)
+
+	count, err := queries.CountOutboxEvents(ctx)
+	if err != nil {
+		return 0, ferr.NewInternalError(err, "failed to `CountOutboxEvents`")
+	}
+
+	return count, nil
+}
+
 // DeleteOutboxEvents deletes the outbox events with the given IDs.
 //
 // It deletes exactly what was published, by ID. Deleting everything up to a

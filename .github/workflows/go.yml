@@ -55,4 +55,7 @@ jobs:
     - name: Lint
       uses: golangci/golangci-lint-action@v8
       with:
-        version: v2.1.6
+        # Pinned to the version the tree is verified against. gosec's overflow
+        # analysis differs between releases, so an unpinned or older binary
+        # reports findings the tree was never checked for.
+        version: v2.12.2

@@ -20,11 +20,6 @@ const (
 	// served on.
 	MetricsServerDefaultPort = 51077
 
-	// metricsServerReadHeaderTimeout bounds how long a client may take to send
-	// its request headers. Without it the server is trivially held open
-	// (gosec G112).
-	metricsServerReadHeaderTimeout = 5 * time.Second
-
 	// metricsServerShutdownTimeout bounds the graceful shutdown of the server.
 	metricsServerShutdownTimeout = 5 * time.Second
 )
@@ -35,6 +30,7 @@ type MetricsServerComponent struct {
 	readinessHandler http.HandlerFunc
 	logger           *logrus.Entry
 	port             int
+	httpConfig       *HTTPConfig
 	server           *http.Server
 }
 
@@ -73,6 +69,20 @@ func WithMetricsServerLivenessHandler(handler http.HandlerFunc) MetricsServerCom
 	}
 }
 
+// WithMetricsServerHTTPConfig applies the service's HTTP timeouts to the
+// metrics server.
+//
+// ENV.md said the HTTP_* settings covered this server; they did not, so an
+// operator tightening them after a scan flagged the probe port changed nothing
+// there.
+func WithMetricsServerHTTPConfig(config *HTTPConfig) MetricsServerComponentOption {
+	return func(c *MetricsServerComponent) {
+		if config != nil {
+			c.httpConfig = config
+		}
+	}
+}
+
 // WithMetricsServerReadinessHandler sets the handler for `/ready`.
 func WithMetricsServerReadinessHandler(handler http.HandlerFunc) MetricsServerComponentOption {
 	return func(c *MetricsServerComponent) {
@@ -84,6 +94,10 @@ func NewMetricsServerComponent(opts ...MetricsServerComponentOption) *MetricsSer
 	c := &MetricsServerComponent{
 		port:   MetricsServerDefaultPort,
 		logger: logrus.NewEntry(logrus.StandardLogger()).WithField("component", MetricsServerComponentName),
+		httpConfig: &HTTPConfig{
+			ReadHeaderTimeout: DefaultHTTPReadHeaderTimeout,
+			IdleTimeout:       DefaultHTTPIdleTimeout,
+		},
 	}
 
 	for _, opt := range opts {
@@ -108,7 +122,10 @@ func NewMetricsServerComponent(opts ...MetricsServerComponentOption) *MetricsSer
 	c.server = &http.Server{
 		Addr:              fmt.Sprintf(":%d", c.port),
 		Handler:           mux,
-		ReadHeaderTimeout: metricsServerReadHeaderTimeout,
+		ReadHeaderTimeout: c.httpConfig.ReadHeaderTimeout,
+		ReadTimeout:       c.httpConfig.ReadTimeout,
+		WriteTimeout:      c.httpConfig.WriteTimeout,
+		IdleTimeout:       c.httpConfig.IdleTimeout,
 	}
 
 	return c

@@ -105,3 +105,37 @@ func TestWithMetricsTracksRequestsInFlight(t *testing.T) {
 
 	close(release)
 }
+
+// net/http accepts any RFC 7230 token as a method, so labelling by r.Method
+// directly let a client mint a counter and a histogram — thirteen series — per
+// request, held for the life of the process.
+func TestWithMetricsBoundsTheMethodLabel(t *testing.T) {
+	before := testutil.ToFloat64(fmetrics.HTTPRequests.WithLabelValues(otherMethod, unmatchedRoute, "404"))
+
+	handler := WithMetrics(http.NotFoundHandler())
+
+	for _, method := range []string{"EVIL0", "EVIL1", "A7f3k9"} {
+		req := httptest.NewRequest(http.MethodGet, "/x", nil)
+		req.Method = method
+
+		handler.ServeHTTP(httptest.NewRecorder(), req)
+	}
+
+	after := testutil.ToFloat64(fmetrics.HTTPRequests.WithLabelValues(otherMethod, unmatchedRoute, "404"))
+
+	assert.Equal(t, 3.0, after-before, "unknown methods must share one series")
+}
+
+func TestMethodLabel(t *testing.T) {
+	for _, method := range []string{
+		http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut,
+		http.MethodPatch, http.MethodDelete, http.MethodConnect,
+		http.MethodOptions, http.MethodTrace,
+	} {
+		assert.Equal(t, method, methodLabel(method))
+	}
+
+	assert.Equal(t, otherMethod, methodLabel("A7f3k9"))
+	assert.Equal(t, otherMethod, methodLabel(""))
+	assert.Equal(t, otherMethod, methodLabel("get"), "the comparison is exact, as HTTP methods are")
+}

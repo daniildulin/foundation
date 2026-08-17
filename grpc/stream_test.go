@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,6 +18,7 @@ import (
 
 	fctx "github.com/foundation-go/foundation/context"
 	ferr "github.com/foundation-go/foundation/errors"
+	fmetrics "github.com/foundation-go/foundation/metrics"
 )
 
 // fakeServerStream is the minimum grpc.ServerStream an interceptor needs.
@@ -170,25 +172,91 @@ func TestRecoveryToleratesANilLogger(t *testing.T) {
 	})
 }
 
-// Recovery has to be outermost, so that it also covers the interceptors that
-// run after it.
-func TestDefaultInterceptorOrder(t *testing.T) {
-	unary := DefaultUnaryInterceptors(discardLogger())
-	require.NotEmpty(t, unary)
+// chainUnary composes interceptors the way grpc.ChainUnaryInterceptor does:
+// the first is outermost.
+func chainUnary(interceptors []grpc.UnaryServerInterceptor) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+		next := handler
 
-	// The outermost interceptor must swallow a panic raised deeper in the chain.
-	_, err := unary[0](context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/svc/M"},
+		for i := len(interceptors) - 1; i >= 0; i-- {
+			interceptor, inner := interceptors[i], next
+			next = func(ctx context.Context, req interface{}) (interface{}, error) {
+				return interceptor(ctx, req, info, inner)
+			}
+		}
+
+		return next(ctx, req)
+	}
+}
+
+// A panicking handler must come out of the chain as an Internal status — and it
+// must be counted. Metrics used to sit inside recovery, so the unwinding panic
+// skipped them: a handler that panicked on every request left the error rate
+// flat at zero while the service returned nothing but errors.
+func TestDefaultUnaryInterceptorsCountPanickingCalls(t *testing.T) {
+	const method = "/svc/PanicMethod"
+
+	before := testutil.ToFloat64(fmetrics.GRPCRequests.WithLabelValues(method, codes.Internal.String()))
+
+	chained := chainUnary(DefaultUnaryInterceptors(discardLogger()))
+
+	resp, err := chained(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: method},
 		func(context.Context, interface{}) (interface{}, error) { panic("boom") })
+
+	assert.Nil(t, resp)
+
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.Internal, st.Code())
+
+	after := testutil.ToFloat64(fmetrics.GRPCRequests.WithLabelValues(method, codes.Internal.String()))
+	assert.Equal(t, 1.0, after-before, "a panicking call must still be counted")
+}
+
+// The status recorded has to be the one the caller receives, i.e. after the
+// Foundation error has been converted.
+func TestDefaultUnaryInterceptorsRecordTheConvertedStatus(t *testing.T) {
+	const method = "/svc/NotFoundMethod"
+
+	before := testutil.ToFloat64(fmetrics.GRPCRequests.WithLabelValues(method, codes.NotFound.String()))
+
+	chained := chainUnary(DefaultUnaryInterceptors(discardLogger()))
+
+	_, err := chained(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: method},
+		func(context.Context, interface{}) (interface{}, error) {
+			return nil, ferr.NewNotFoundError(nil, "chat", "1")
+		})
+
+	st, _ := status.FromError(err)
+	assert.Equal(t, codes.NotFound, st.Code())
+
+	after := testutil.ToFloat64(fmetrics.GRPCRequests.WithLabelValues(method, codes.NotFound.String()))
+	assert.Equal(t, 1.0, after-before)
+}
+
+func TestDefaultStreamInterceptorsRecoverAndCount(t *testing.T) {
+	const method = "/svc/PanicStream"
+
+	before := testutil.ToFloat64(fmetrics.GRPCRequests.WithLabelValues(method, codes.Internal.String()))
+
+	interceptors := DefaultStreamInterceptors(discardLogger())
+	require.NotEmpty(t, interceptors)
+
+	next := grpc.StreamHandler(func(interface{}, grpc.ServerStream) error { panic("boom") })
+	info := &grpc.StreamServerInfo{FullMethod: method}
+
+	for i := len(interceptors) - 1; i >= 0; i-- {
+		interceptor, inner := interceptors[i], next
+		next = func(srv interface{}, stream grpc.ServerStream) error {
+			return interceptor(srv, stream, info, inner)
+		}
+	}
+
+	err := next(nil, &fakeServerStream{ctx: context.Background()})
 
 	st, _ := status.FromError(err)
 	assert.Equal(t, codes.Internal, st.Code())
 
-	streams := DefaultStreamInterceptors(discardLogger())
-	require.NotEmpty(t, streams)
-
-	err = streams[0](nil, &fakeServerStream{ctx: context.Background()}, &grpc.StreamServerInfo{FullMethod: "/svc/S"},
-		func(interface{}, grpc.ServerStream) error { panic("boom") })
-
-	st, _ = status.FromError(err)
-	assert.Equal(t, codes.Internal, st.Code())
+	after := testutil.ToFloat64(fmetrics.GRPCRequests.WithLabelValues(method, codes.Internal.String()))
+	assert.Equal(t, 1.0, after-before)
 }

@@ -119,7 +119,11 @@ func (opts *EventsWorkerOptions) Registry() (map[string]*handlerEntry, error) {
 			)
 		}
 
-		if ProtoNameToTopic(name) == "" {
+		// A message with no proto package yields no topic. That only matters
+		// when the topics are being derived from the handled types: a worker
+		// that lists its topics explicitly — consuming a legacy or third-party
+		// topic, say — has no need for the derivation at all.
+		if len(opts.Topics) == 0 && ProtoNameToTopic(name) == "" {
 			return nil, fmt.Errorf(
 				"event `%s` has no package, so no Kafka topic can be derived from it; "+
 					"declare the message inside a proto package, or set EventsWorkerOptions.Topics explicitly",

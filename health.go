@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sync"
 	"time"
 
 	fmetrics "github.com/foundation-go/foundation/metrics"
@@ -40,37 +41,59 @@ func (s *Service) readinessHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// One budget for the whole probe, so a slow component cannot make the
-	// handler outlive the probe timeout on the other side.
-	ctx, cancel := context.WithTimeout(r.Context(), s.healthCheckTimeout())
-	defer cancel()
+	// Components are checked concurrently, each with its own budget.
+	//
+	// Sharing one deadline across a sequential loop meant the first slow
+	// component consumed it and every component after that was reported down
+	// with "context deadline exceeded" — one unreachable database made the
+	// probe accuse Redis and Kafka too, and paged somebody for a three-way
+	// outage that was not happening.
+	timeout := s.healthCheckTimeout()
 
-	status := healthStatus{Status: "ok"}
+	var (
+		mu     sync.Mutex
+		wg     sync.WaitGroup
+		status = healthStatus{Status: "ok"}
+	)
 
 	for _, component := range s.Components {
-		started := time.Now()
+		wg.Add(1)
 
-		err := checkComponentHealth(ctx, component)
-		fmetrics.SetComponentUp(component.Name(), err == nil)
+		go func(component Component) {
+			defer wg.Done()
 
-		if err != nil {
-			if status.Components == nil {
-				status.Components = make(map[string]string)
+			ctx, cancel := context.WithTimeout(r.Context(), timeout)
+			defer cancel()
+
+			started := time.Now()
+			err := checkComponentHealth(ctx, component)
+
+			fmetrics.SetComponentUp(component.Name(), err == nil)
+
+			if err == nil {
+				s.Logger.Debugf("Health check for `%s` took %dms", component.Name(), time.Since(started).Milliseconds())
+
+				return
 			}
-
-			status.Components[component.Name()] = err.Error()
-			status.Status = "unavailable"
 
 			// Probes run every few seconds. Reporting each failure to Sentry
 			// would bury the project in duplicates for the length of any
 			// outage, so this only logs; the readiness metric is the signal.
 			s.Logger.Warnf("Health check failed for `%s`: %v", component.Name(), err)
 
-			continue
-		}
+			mu.Lock()
+			defer mu.Unlock()
 
-		s.Logger.Debugf("Health check for `%s` took %dms", component.Name(), time.Since(started).Milliseconds())
+			if status.Components == nil {
+				status.Components = make(map[string]string)
+			}
+
+			status.Components[component.Name()] = err.Error()
+			status.Status = "unavailable"
+		}(component)
 	}
+
+	wg.Wait()
 
 	if status.Status != "ok" {
 		writeHealthStatus(w, http.StatusServiceUnavailable, status)

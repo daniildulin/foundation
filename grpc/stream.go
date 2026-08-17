@@ -85,10 +85,13 @@ func LoggingStreamInterceptor(log *logrus.Entry, _ ...LoggingOption) grpc.Stream
 // on every gRPC server, in the order they run.
 func DefaultStreamInterceptors(log *logrus.Entry, opts ...LoggingOption) []grpc.StreamServerInterceptor {
 	return []grpc.StreamServerInterceptor{
-		RecoveryStreamInterceptor(log),
-		// Metrics sit outside the error conversion, so the status code they
-		// record is the one the caller actually receives.
+		// Metrics are outermost: outside the error conversion, so the status
+		// code recorded is the one the caller receives, and outside recovery,
+		// so a call that panics is still counted. Inside recovery it was
+		// skipped entirely by the unwinding panic, and a handler that panicked
+		// on every request left the error rate flat at zero.
 		MetricsStreamInterceptor,
+		RecoveryStreamInterceptor(log),
 		MetadataStreamInterceptor,
 		FoundationErrorToStatusStreamInterceptor,
 		LoggingStreamInterceptor(log, opts...),
@@ -99,11 +102,14 @@ func DefaultStreamInterceptors(log *logrus.Entry, opts ...LoggingOption) []grpc.
 // on every gRPC server, in the order they run.
 func DefaultUnaryInterceptors(log *logrus.Entry, opts ...LoggingOption) []grpc.UnaryServerInterceptor {
 	return []grpc.UnaryServerInterceptor{
-		// Recovery is outermost so that it also covers the interceptors below.
-		RecoveryUnaryInterceptor(log),
-		// Metrics sit outside the error conversion, so the status code they
-		// record is the one the caller actually receives.
+		// Metrics are outermost: outside the error conversion, so the status
+		// code recorded is the one the caller receives, and outside recovery,
+		// so a call that panics is still counted. Inside recovery it was
+		// skipped entirely by the unwinding panic, and a handler that panicked
+		// on every request left the error rate flat at zero.
 		MetricsUnaryInterceptor,
+		// Recovery covers every interceptor below it.
+		RecoveryUnaryInterceptor(log),
 		MetadataUnaryInterceptor,
 		FoundationErrorToStatusUnaryInterceptor,
 		LoggingUnaryInterceptor(log, opts...),

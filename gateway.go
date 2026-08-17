@@ -150,8 +150,15 @@ func (s *Gateway) ServiceFunc(ctx context.Context) error {
 	}
 	muxOpts = append(muxOpts, s.Options.MuxOpts...)
 
+	// N.B.: context.WithoutCancel, deliberately. grpc-gateway's generated
+	// registration closes each downstream connection when this context is
+	// cancelled — and `ctx` is cancelled at the *start* of the shutdown, which
+	// would kill every in-flight proxied call with "grpc: the client
+	// connection is closing" while the HTTP server is still politely draining
+	// them. The deferred mux.Close below releases the connections after the
+	// drain, which is the right moment.
 	mux, err := gateway.RegisterServices(
-		ctx,
+		context.WithoutCancel(ctx),
 		s.Options.Services,
 		&gateway.RegisterServicesOptions{
 			MuxOpts: muxOpts,
@@ -186,9 +193,14 @@ func (s *Gateway) ServiceFunc(ctx context.Context) error {
 
 	<-ctx.Done()
 
-	// Gracefully stop the HTTP server
+	// Gracefully stop the HTTP server.
+	//
+	// A shutdown that runs out of budget is reported, not returned: returning
+	// it reaches Service.Fatal, which exits(1) and skips StopComponents — so a
+	// single slow request would cost the Kafka flush, the Sentry flush and a
+	// clean exit code on an otherwise ordinary rollout.
 	if err := s.shutdownHTTPServer(server); err != nil {
-		return fmt.Errorf("failed to gracefully shutdown HTTP server: %w", err)
+		s.CaptureError(err, "failed to gracefully shutdown the gateway HTTP server")
 	}
 
 	return nil
