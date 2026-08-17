@@ -552,6 +552,12 @@ func (s *Service) Start(opts *StartOptions) {
 
 	fmetrics.Info.WithLabelValues(s.Name, s.ModeName, string(FoundationEnv()), Version).Set(1)
 
+	// Tracing is initialised for every mode. It used to be set up inside the
+	// gateway alone, so a trace stopped at the first hop: gRPC services and
+	// every worker were invisible.
+	tracingShutdown := s.initTracing()
+	defer tracingShutdown()
+
 	// Start common components
 	if err := s.StartComponents(opts.StartComponentsOptions...); err != nil {
 		s.Fatal(err, "failed to start components")

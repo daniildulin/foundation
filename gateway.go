@@ -10,6 +10,7 @@ import (
 	"time"
 
 	gwruntime "github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"google.golang.org/protobuf/encoding/protojson"
 
 	"github.com/foundation-go/foundation/gateway"
@@ -132,9 +133,6 @@ func (s *Gateway) ServiceFunc(ctx context.Context) error {
 	gwruntime.DefaultContextTimeout = s.Options.Timeout
 	s.Logger.Debugf("Downstream requests timeout: %s", s.Options.Timeout)
 
-	tracingShutdown := s.initTracing()
-	defer tracingShutdown()
-
 	marshaler := s.Options.Marshaler
 	if marshaler == nil {
 		marshaler = &gwruntime.JSONPb{
@@ -164,7 +162,17 @@ func (s *Gateway) ServiceFunc(ctx context.Context) error {
 	}
 
 	port := GetEnvOrInt("PORT", DefaultPort)
-	server := s.newHTTPServer(port, s.applyMiddleware(mux, s.Options))
+
+	// otelhttp wraps the whole chain so that the server span is the parent of
+	// everything the request does, including the client spans for downstream
+	// gRPC calls, which previously had no parent at all.
+	handler := otelhttp.NewHandler(
+		s.applyMiddleware(mux, s.Options),
+		"gateway",
+		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string { return r.Method }),
+	)
+
+	server := s.newHTTPServer(port, handler)
 
 	s.Logger.Infof("Listening on http://0.0.0.0:%d", port)
 

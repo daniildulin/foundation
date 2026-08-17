@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc/metadata"
 
 	fmetrics "github.com/foundation-go/foundation/metrics"
@@ -67,6 +69,17 @@ func WithMetrics(next http.Handler) http.Handler {
 		// The annotator has run by now, on this goroutine, so reading the
 		// holder needs no synchronisation.
 		route := holder.route
+
+		// The server span was opened before routing, so it could only be named
+		// after the method. Now that the route is known, say so — a trace list
+		// of bare "GET" is not much use.
+		if span := trace.SpanFromContext(r.Context()); span.IsRecording() {
+			span.SetName(r.Method + " " + route)
+			span.SetAttributes(
+				attribute.String("http.route", route),
+				attribute.Int("http.status_code", lrw.Status()),
+			)
+		}
 
 		fmetrics.HTTPRequests.
 			WithLabelValues(r.Method, route, strconv.Itoa(lrw.statusCode)).

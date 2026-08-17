@@ -6,6 +6,7 @@ import (
 	"net"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
 	fg "github.com/foundation-go/foundation/grpc"
@@ -59,6 +60,9 @@ func (s *GRPCServer) ServiceFunc(ctx context.Context) error {
 	defaultOptions := []grpc.ServerOption{
 		grpc.ChainUnaryInterceptor(fg.DefaultUnaryInterceptors(s.Logger)...),
 		grpc.ChainStreamInterceptor(fg.DefaultStreamInterceptors(s.Logger)...),
+		// Continues the trace the gateway started; without a server handler the
+		// incoming traceparent was dropped and every service began a new trace.
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 	}
 
 	// Prepend the default server options in front of the application-defined ones
