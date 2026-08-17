@@ -384,12 +384,21 @@ func (s *Service) StartComponents(opts ...StartComponentsOption) error {
 
 	s.Logger.Info("Starting components:")
 
+	started := make([]Component, 0, len(s.Components))
+
 	for _, component := range s.Components {
 		s.Logger.Infof(" - %s", component.Name())
 
 		if err := component.Start(); err != nil {
+			// Unwind what is already running. Otherwise a service that fails to
+			// start halfway through leaves database connections, Kafka readers
+			// and listening sockets behind it.
+			s.stopComponents(started)
+
 			return fmt.Errorf("%s: %w", component.Name(), err)
 		}
+
+		started = append(started, component)
 	}
 
 	return nil
@@ -404,16 +413,63 @@ func (s *Service) Shutdown() {
 }
 
 // StopComponents stops the default Foundation service components.
+//
+// It is bounded by Config.ShutdownTimeout: a component that refuses to stop
+// must not keep the process alive until the supervisor kills it, because then
+// nothing after this point — flushing Sentry, for one — gets to run.
 func (s *Service) StopComponents() {
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		s.stopComponents(s.Components)
+	}()
+
+	timeout := s.shutdownTimeout()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case <-done:
+	case <-timer.C:
+		s.Logger.Errorf("Components did not stop within %s; exiting anyway", timeout)
+	}
+}
+
+// stopComponents stops the given components in reverse order, so that
+// dependents go down before their dependencies.
+func (s *Service) stopComponents(components []Component) {
+	if len(components) == 0 {
+		return
+	}
+
 	s.Logger.Info("Stopping components:")
 
-	// Stop components in reverse order, so that dependencies are stopped first
-	for i := len(s.Components) - 1; i >= 0; i-- {
-		s.Logger.Infof(" - %s", s.Components[i].Name())
+	for i := len(components) - 1; i >= 0; i-- {
+		s.stopComponent(components[i])
+	}
+}
 
-		if err := s.Components[i].Stop(); err != nil {
-			s.CaptureError(err, fmt.Sprintf("failed to stop component `%s`", s.Components[i].Name()))
+// stopComponent stops a single component, containing both errors and panics:
+// one misbehaving component must not prevent the rest from shutting down.
+func (s *Service) stopComponent(component Component) {
+	name := component.Name()
+
+	defer func() {
+		if r := recover(); r != nil {
+			s.CaptureError(
+				fmt.Errorf("panic while stopping component `%s`: %v", name, r),
+				"",
+			)
 		}
+	}()
+
+	s.Logger.Infof(" - %s", name)
+
+	if err := component.Stop(); err != nil {
+		s.CaptureError(err, fmt.Sprintf("failed to stop component `%s`", name))
 	}
 }
 
