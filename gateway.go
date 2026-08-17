@@ -50,11 +50,22 @@ type GatewayOptions struct {
 	// This means MuxOpts can override Foundation defaults (e.g. add a later WithMarshalerOption).
 	MuxOpts []gwruntime.ServeMuxOption
 	// AuthenticationDetailsMiddleware is a middleware that populates the request context with authentication details.
+	//
+	// It is the only place in the chain that runs before authentication is
+	// enforced, so it is required whenever WithAuthentication is enabled.
 	AuthenticationDetailsMiddleware func(http.Handler) http.Handler
 	// WithAuthentication enables authentication for the gateway.
 	WithAuthentication bool
 	// AuthenticationExcept is a list of paths that should not be authenticated.
 	AuthenticationExcept []string
+	// TrustInboundAuthenticationHeaders disables stripping the identity-bearing
+	// Foundation headers (`X-Authenticated`, `X-User-Id`, `X-Client-Id`,
+	// `X-Scope`, `X-Metadata`) from incoming requests.
+	//
+	// Leave this off unless the gateway is only reachable through a trusted
+	// proxy that sets those headers itself. With it on, any client that can
+	// reach the gateway can impersonate any user.
+	TrustInboundAuthenticationHeaders bool
 	// Middleware is a list of middleware to apply to the gateway. The middleware is applied in the order it is defined.
 	Middleware []func(http.Handler) http.Handler
 	// StartComponentsOptions are the options to start the components.
@@ -83,6 +94,21 @@ func NewGatewayOptions() *GatewayOptions {
 	}
 }
 
+// Validate reports configuration mistakes that would leave the gateway in an
+// unsafe or non-functional state.
+func (o *GatewayOptions) Validate() error {
+	if o.WithAuthentication && o.AuthenticationDetailsMiddleware == nil {
+		return errors.New(
+			"WithAuthentication is enabled but AuthenticationDetailsMiddleware is not set: " +
+				"without it nothing populates the identity headers, and WithAuthentication " +
+				"would accept whatever the client sent. Set AuthenticationDetailsMiddleware " +
+				"(e.g. gateway.WithHydraAuthenticationDetails) or disable WithAuthentication",
+		)
+	}
+
+	return nil
+}
+
 // Start runs the Foundation gateway.
 func (s *Gateway) Start(opts *GatewayOptions) {
 	s.Options = opts
@@ -95,6 +121,10 @@ func (s *Gateway) Start(opts *GatewayOptions) {
 }
 
 func (s *Gateway) ServiceFunc(ctx context.Context) error {
+	if err := s.Options.Validate(); err != nil {
+		return fmt.Errorf("invalid gateway options: %w", err)
+	}
+
 	gwruntime.DefaultContextTimeout = s.Options.Timeout
 	s.Logger.Debugf("Downstream requests timeout: %s", s.Options.Timeout)
 
@@ -155,6 +185,18 @@ func (s *Gateway) ServiceFunc(ctx context.Context) error {
 
 func (s *Service) applyMiddleware(mux http.Handler, opts *GatewayOptions) http.Handler {
 	var middleware []func(http.Handler) http.Handler
+
+	// Trust boundary: drop identity headers supplied by the client before
+	// anything downstream — including WithAuthentication — gets to read them.
+	// This has to stay first in the chain.
+	if !opts.TrustInboundAuthenticationHeaders {
+		middleware = append(middleware, gateway.StripClientAuthenticationHeaders)
+	} else {
+		s.Logger.Warn(
+			"TrustInboundAuthenticationHeaders is enabled: identity headers are taken from the " +
+				"client as-is. Only do this behind a trusted proxy.",
+		)
+	}
 
 	// General middleware
 	middleware = append(middleware, gateway.WithRequestLogger(s.Logger), gateway.WithCORSEnabled(opts.CORSOptions))

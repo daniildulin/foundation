@@ -51,6 +51,22 @@ const (
 	HeaderXRequestID = "X-Request-Id"
 )
 
+// AuthenticationHeaders is the subset of Foundation headers that carries the
+// caller's identity.
+//
+// These headers are produced by the gateway from the result of authenticating
+// the request, and are trusted by every downstream service. They MUST NOT be
+// accepted from clients: a request that arrives with any of them set is
+// attempting to impersonate somebody. The gateway strips them from every
+// incoming request before the middleware chain runs.
+var AuthenticationHeaders = []string{
+	HeaderXAuthenticated,
+	HeaderXClientID,
+	HeaderXMetadata,
+	HeaderXScope,
+	HeaderXUserID,
+}
+
 // FoundationHeaders is a list of all Foundation HTTP headers.
 //
 // Use this list when referencing all Foundation HTTP headers in your code.
