@@ -122,6 +122,13 @@ func (c *CableCourier) Start(opts *CableCourierOptions) {
 		},
 	}
 
+	// Errors are published to EVENTS_WORKER_ERRORS_TOPIC when it is set, which
+	// is not a topic any handled proto name would produce. Subscribe to it too,
+	// or the courier would never see the errors it exists to deliver.
+	if errorsTopic := c.Config.EventsWorker.ErrorsTopic; errorsTopic != "" {
+		ewOpts.Topics = append(ewOpts.GetTopics(), errorsTopic)
+	}
+
 	c.EventsWorker.Start(ewOpts)
 }
 

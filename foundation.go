@@ -92,13 +92,27 @@ type DatabaseConfig struct {
 // EventsWorkerConfig represents the configuration of an event bus.
 type EventsWorkerConfig struct {
 	// ErrorsTopic is the name of the Kafka topic to which errors from the
-	// events worker handlers should be published.
+	// events worker handlers are published.
+	//
+	// Empty — the default — means the topic is derived from the error's proto
+	// name like any other event, which puts Foundation errors on
+	// `foundation.errors`.
 	ErrorsTopic string
 
 	// DeliverErrors determines whether errors from events worker handlers
 	// should be published to the errors topic (and thus, delivered
 	// to originator, aka user) or not.
 	DeliverErrors bool
+}
+
+// TopicFor returns the topic an error event should be published to: the
+// configured errors topic, or the one derived from the message name.
+func (c *EventsWorkerConfig) TopicFor(derived string) string {
+	if c != nil && c.ErrorsTopic != "" {
+		return c.ErrorsTopic
+	}
+
+	return derived
 }
 
 // GRPCConfig represents the configuration of a gRPC server.
@@ -195,7 +209,7 @@ func NewConfig() *Config {
 			URL:     GetEnvOrString("DATABASE_URL", ""),
 		},
 		EventsWorker: &EventsWorkerConfig{
-			ErrorsTopic:   GetEnvOrString("EVENTS_WORKER_ERRORS_TOPIC", "foundation.events_worker.errors"),
+			ErrorsTopic:   GetEnvOrString("EVENTS_WORKER_ERRORS_TOPIC", ""),
 			DeliverErrors: GetEnvOrBool("EVENTS_WORKER_DELIVER_ERRORS", true),
 		},
 		GRPC: &GRPCConfig{

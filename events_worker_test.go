@@ -292,3 +292,44 @@ func TestProtoNameToTopic(t *testing.T) {
 	assert.Equal(t, "", ProtoNameToTopic(""))
 	assert.Equal(t, "", ProtoNameToTopic(".SomeEvent"))
 }
+
+// EVENTS_WORKER_ERRORS_TOPIC and EVENTS_WORKER_DELIVER_ERRORS were read into
+// the config, documented in ENV.md, and then never consulted.
+func TestEventsWorkerConfigTopicFor(t *testing.T) {
+	assert.Equal(t, "foundation.errors", (&EventsWorkerConfig{}).TopicFor("foundation.errors"))
+	assert.Equal(t, "errors.v2", (&EventsWorkerConfig{ErrorsTopic: "errors.v2"}).TopicFor("foundation.errors"))
+
+	var nilConfig *EventsWorkerConfig
+	assert.Equal(t, "foundation.errors", nilConfig.TopicFor("foundation.errors"))
+}
+
+func TestPublishHandlerErrorRespectsDeliverErrors(t *testing.T) {
+	worker, _ := newTestEventsWorker(t, map[proto.Message][]EventHandler{
+		&ferrpb.NotFoundError{}: {&recordingHandler{}},
+	})
+	worker.Config.EventsWorker = &EventsWorkerConfig{DeliverErrors: false}
+
+	event := &Event{Headers: map[string]string{fkafka.HeaderOriginatorID: "user-1"}}
+
+	// With delivery disabled nothing is published, so the missing Kafka
+	// producer is never reached.
+	require.NotPanics(t, func() {
+		assert.Nil(t, worker.publishHandlerError(
+			context.Background(), event, ferr.NewNotFoundError(nil, "chat", "1"),
+		))
+	})
+}
+
+// Without an originator there is nobody to deliver the error to.
+func TestPublishHandlerErrorWithoutAnOriginator(t *testing.T) {
+	worker, _ := newTestEventsWorker(t, map[proto.Message][]EventHandler{
+		&ferrpb.NotFoundError{}: {&recordingHandler{}},
+	})
+	worker.Config.EventsWorker = &EventsWorkerConfig{DeliverErrors: true}
+
+	require.NotPanics(t, func() {
+		assert.Nil(t, worker.publishHandlerError(
+			context.Background(), &Event{Headers: map[string]string{}}, ferr.NewNotFoundError(nil, "chat", "1"),
+		))
+	})
+}

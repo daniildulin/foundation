@@ -292,13 +292,10 @@ func (w *EventsWorker) handleMessage(
 		if handleErr != nil {
 			handlerLog.WithError(handleErr).Errorf("Failed to process event `%s`", event.ProtoName)
 
-			// We publish the error event to the error topic for further delivery to the user via WebSocket.
-			if event.Headers[fkafka.HeaderOriginatorID] != "" {
-				if err := w.NewAndPublishEvent(
-					ctx, handleErr.MarshalProto(), event.Headers[fkafka.HeaderOriginatorID], nil, nil,
-				); err != nil {
-					return false, err
-				}
+			// Publish the error to the errors topic, for delivery back to
+			// whoever originated the request over WebSocket.
+			if err := w.publishHandlerError(ctx, event, handleErr); err != nil {
+				return false, err
 			}
 
 			// We just stop all the subsequent handlers from processing the event if one of them failed.
@@ -320,6 +317,32 @@ func (w *EventsWorker) handleMessage(
 	}
 
 	return true, handleErr
+}
+
+// publishHandlerError delivers a failed handler's error back to the originator
+// of the request, honouring EVENTS_WORKER_DELIVER_ERRORS and
+// EVENTS_WORKER_ERRORS_TOPIC — both of which were read into the config and then
+// never consulted.
+func (w *EventsWorker) publishHandlerError(ctx context.Context, event *Event, handleErr ferr.FoundationError) ferr.FoundationError {
+	originatorID := event.Headers[fkafka.HeaderOriginatorID]
+	if originatorID == "" {
+		return nil
+	}
+
+	if w.Config != nil && w.Config.EventsWorker != nil && !w.Config.EventsWorker.DeliverErrors {
+		return nil
+	}
+
+	errorEvent, err := NewEventFromProto(handleErr.MarshalProto(), originatorID, nil)
+	if err != nil {
+		return err
+	}
+
+	if w.Config != nil {
+		errorEvent.Topic = w.Config.EventsWorker.TopicFor(errorEvent.Topic)
+	}
+
+	return w.PublishEvent(ctx, errorEvent, nil)
 }
 
 func (w *EventsWorker) processEvent(ctx context.Context, handler EventHandler, event *Event, msg proto.Message) ferr.FoundationError {
