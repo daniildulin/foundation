@@ -43,9 +43,9 @@ var DBRollback = &cobra.Command{
 		}
 
 		// Parse `steps` flag
-		steps, err := cmd.Flags().GetInt("step")
-		if err != nil || steps <= 0 {
-			log.Fatal("You should set `--steps` flag to a positive integer")
+		steps, err := rollbackSteps(cmd)
+		if err != nil {
+			log.Fatal(err)
 		}
 
 		// Check if `DATABASE_URL` environment variable is set
@@ -66,11 +66,29 @@ var DBRollback = &cobra.Command{
 	},
 }
 
+// rollbackStepsFlag is referenced both when the flag is registered and when it
+// is read, so the two cannot drift apart again.
+const rollbackStepsFlag = "steps"
+
+// rollbackSteps reads and validates the number of migrations to roll back.
+func rollbackSteps(cmd *cobra.Command) (int, error) {
+	steps, err := cmd.Flags().GetInt(rollbackStepsFlag)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read `--%s`: %w", rollbackStepsFlag, err)
+	}
+
+	if steps <= 0 {
+		return 0, fmt.Errorf("`--%s` must be a positive integer, got %d", rollbackStepsFlag, steps)
+	}
+
+	return steps, nil
+}
+
 func init() {
 	DBRollback.Flags().StringP("dir", "d", MigrationsDirectory, "Directory containing migrations (only applicable in production)")
 	if err := DBRollback.MarkFlagDirname("dir"); err != nil {
 		log.Fatal(err)
 	}
 
-	DBRollback.Flags().Int32P("steps", "s", 1, "Number of migrations to rollback")
+	DBRollback.Flags().IntP(rollbackStepsFlag, "s", 1, "Number of migrations to rollback")
 }
