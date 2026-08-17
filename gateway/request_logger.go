@@ -18,6 +18,19 @@ type LoggingResponseWriter struct {
 	statusCode int
 }
 
+// Unwrap allows net/http utilities (e.g. ResponseController) to reach the underlying writer.
+func (lrw *LoggingResponseWriter) Unwrap() http.ResponseWriter { return lrw.ResponseWriter }
+
+// loggingFlushingResponseWriter is a LoggingResponseWriter that additionally implements http.Flusher.
+// We intentionally use a separate wrapper so we don't "lie" about Flusher support when the underlying
+// ResponseWriter doesn't implement it.
+type loggingFlushingResponseWriter struct {
+	*LoggingResponseWriter
+	flusher http.Flusher
+}
+
+func (w *loggingFlushingResponseWriter) Flush() { w.flusher.Flush() }
+
 // NewLoggingResponseWriter creates a new loggingResponseWriter that wraps the provided http.ResponseWriter.
 // If WriteHeader is not called, the response will implicitly return a status code of 200 OK.
 func NewLoggingResponseWriter(w http.ResponseWriter) *LoggingResponseWriter {
@@ -36,12 +49,18 @@ func WithRequestLogger(l *log.Entry) func(http.Handler) http.Handler {
 			// Record the start time of the request
 			started := time.Now()
 
-			// Generate the request ID
-			requestID := uuid.New().String()
+			// Generate correlation ID
+			correlationID := uuid.New().String()
 			// pass it down to app
-			request.Header.Set(fhttp.HeaderXCorrelationID, requestID)
+			request.Header.Set(fhttp.HeaderXCorrelationID, correlationID)
 			// write it to HTTP response
-			writer.Header().Set(fhttp.HeaderXCorrelationID, requestID)
+			writer.Header().Set(fhttp.HeaderXCorrelationID, correlationID)
+
+			// Use the existing request ID if it exists in response headers
+			requestID := request.Header.Get(fhttp.HeaderXRequestID)
+			if requestID != "" {
+				writer.Header().Set(fhttp.HeaderXRequestID, requestID)
+			}
 
 			// Add the logger to the request context
 			l = l.WithFields(log.Fields{
@@ -54,10 +73,14 @@ func WithRequestLogger(l *log.Entry) func(http.Handler) http.Handler {
 
 			// Wrap the response writer with our logging response writer
 			lrw := NewLoggingResponseWriter(writer)
+			var w http.ResponseWriter = lrw
+			if f, ok := writer.(http.Flusher); ok {
+				w = &loggingFlushingResponseWriter{LoggingResponseWriter: lrw, flusher: f}
+			}
 
 			// Serve the request with the wrapped response writer
 			l.Infoln("Request started")
-			handler.ServeHTTP(lrw, request)
+			handler.ServeHTTP(w, request)
 
 			// Calculate the duration of the request
 			duration := time.Since(started)
