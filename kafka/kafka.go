@@ -459,30 +459,38 @@ func newTransport(tlsDir string, saslMechanism sasl.Mechanism) (*kafka.Transport
 	}, nil
 }
 
+// newTLSConfig loads the client certificate, key and CA from dir.
+//
+// The file names follow the Kubernetes TLS secret convention: `tls.crt`,
+// `tls.key` and `ca.crt`.
 func newTLSConfig(dir string) (*tls.Config, error) {
 	certFile := filepath.Join(dir, "tls.crt")
 	keyFile := filepath.Join(dir, "tls.key")
 	caFile := filepath.Join(dir, "ca.crt")
 
-	tlsConfig := &tls.Config{}
-
-	// Load client cert
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to load the Kafka client certificate from %s: %w", dir, err)
 	}
-	tlsConfig.Certificates = []tls.Certificate{cert}
 
-	// Load CA cert
 	caCert, err := os.ReadFile(caFile)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read the Kafka CA certificate: %w", err)
 	}
-	caCertPool := x509.NewCertPool()
-	caCertPool.AppendCertsFromPEM(caCert)
-	tlsConfig.RootCAs = caCertPool
 
-	return tlsConfig, nil
+	caCertPool := x509.NewCertPool()
+	// The result was discarded, so a malformed CA file produced an empty pool
+	// and every connection failed the handshake with nothing to suggest the CA
+	// had simply failed to parse.
+	if !caCertPool.AppendCertsFromPEM(caCert) {
+		return nil, fmt.Errorf("no certificates could be parsed from %s", caFile)
+	}
+
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		RootCAs:      caCertPool,
+		MinVersion:   tls.VersionTLS12,
+	}, nil
 }
 
 // newSASLMechanism return a SASL mechanism

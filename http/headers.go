@@ -2,17 +2,18 @@ package http
 
 // Standard HTTP headers, that Foundation uses.
 const (
-	HeaderAcceptEncoding             = "Accept-Encoding"
-	HeaderAccept                     = "Accept"
-	HeaderAccessControlAllowHeaders  = "Access-Control-Allow-Headers"
-	HeaderAccessControlAllowMethods  = "Access-Control-Allow-Methods"
-	HeaderAccessControlAllowOrigin   = "Access-Control-Allow-Origin"
-	HeaderAccessControlExposeHeaders = "Access-Control-Expose-Headers"
-	HeaderAccessControlMaxAge        = "Access-Control-Max-Age"
-	HeaderAuthorization              = "Authorization"
-	HeaderContentLength              = "Content-Length"
-	HeaderContentType                = "Content-Type"
-	HeaderResponseType               = "ResponseType"
+	HeaderAcceptEncoding                = "Accept-Encoding"
+	HeaderAccept                        = "Accept"
+	HeaderAccessControlAllowCredentials = "Access-Control-Allow-Credentials"
+	HeaderAccessControlAllowHeaders     = "Access-Control-Allow-Headers"
+	HeaderAccessControlAllowMethods     = "Access-Control-Allow-Methods"
+	HeaderAccessControlAllowOrigin      = "Access-Control-Allow-Origin"
+	HeaderAccessControlExposeHeaders    = "Access-Control-Expose-Headers"
+	HeaderAccessControlMaxAge           = "Access-Control-Max-Age"
+	HeaderAuthorization                 = "Authorization"
+	HeaderContentLength                 = "Content-Length"
+	HeaderContentType                   = "Content-Type"
+	HeaderResponseType                  = "ResponseType"
 )
 
 // Foundation HTTP headers

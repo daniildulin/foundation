@@ -160,6 +160,7 @@ func (s *Gateway) ServiceFunc(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to register services: %w", err)
 	}
+	defer mux.Close() //nolint:errcheck // best effort on shutdown
 
 	port := GetEnvOrInt("PORT", DefaultPort)
 
