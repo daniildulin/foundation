@@ -196,8 +196,15 @@ func (s *Service) applyMiddleware(mux http.Handler, opts *GatewayOptions) http.H
 		)
 	}
 
-	// General middleware
-	middleware = append(middleware, gateway.WithRequestLogger(s.Logger), gateway.WithCORSEnabled(opts.CORSOptions))
+	// General middleware.
+	//
+	// Recovery sits just inside the request logger, so a panic report carries
+	// the request's fields, and outside everything else.
+	middleware = append(middleware,
+		gateway.WithRequestLogger(s.Logger),
+		gateway.WithRecovery,
+		gateway.WithCORSEnabled(opts.CORSOptions),
+	)
 
 	// Swagger middleware
 	if len(opts.SwaggerEndpoints) > 0 {

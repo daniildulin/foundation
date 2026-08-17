@@ -2,6 +2,8 @@ package foundation
 
 import (
 	"context"
+	"fmt"
+	"runtime/debug"
 	"time"
 
 	ferr "github.com/foundation-go/foundation/errors"
@@ -113,6 +115,25 @@ func (sw *SpinWorker) drain(done <-chan struct{}) {
 	}
 }
 
+// runIteration runs a single ProcessFunc call.
+//
+// A panic here used to kill the process: it happened on the worker goroutine,
+// where nothing recovers it and nothing reports it either.
+func (sw *SpinWorker) runIteration(ctx context.Context) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			sw.CaptureError(
+				fmt.Errorf("panic in worker iteration: %v\n%s", recovered, debug.Stack()),
+				"",
+			)
+		}
+	}()
+
+	if err := sw.Options.ProcessFunc(ctx); err != nil {
+		sw.HandleError(err, "failed to process iteration")
+	}
+}
+
 // loop runs ProcessFunc until the context is cancelled.
 func (sw *SpinWorker) loop(ctx context.Context) {
 	for {
@@ -122,9 +143,7 @@ func (sw *SpinWorker) loop(ctx context.Context) {
 
 		started := time.Now()
 
-		if err := sw.Options.ProcessFunc(ctx); err != nil {
-			sw.HandleError(err, "failed to process iteration")
-		}
+		sw.runIteration(ctx)
 
 		if sw.Options.Interval <= 0 {
 			continue

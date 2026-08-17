@@ -16,6 +16,13 @@ import (
 // This is implemented to standardize the retrieval of common values from the context, regardless of whether
 // we are writing gRPC or Event Bus handlers.
 func MetadataUnaryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
+	return handler(contextFromMetadata(ctx), req)
+}
+
+// contextFromMetadata copies the values the gateway forwards as gRPC metadata
+// into the context, so that handlers read them the same way regardless of
+// whether they were reached over gRPC or through the event bus.
+func contextFromMetadata(ctx context.Context) context.Context {
 	ctx = fctx.WithCorrelationID(ctx, getCorrelationID(ctx))
 	ctx = fctx.WithClientID(ctx, getClientID(ctx))
 	ctx = fctx.WithScopes(ctx, getScopes(ctx))
@@ -24,9 +31,7 @@ func MetadataUnaryInterceptor(ctx context.Context, req interface{}, info *grpc.U
 	ctx = fctx.WithAuthenticated(ctx, getAuthenticated(ctx))
 	ctx = fctx.WithRequestID(ctx, getRequestID(ctx))
 
-	resp, err = handler(ctx, req)
-
-	return resp, err
+	return ctx
 }
 
 // GetMetadataValue retrieves the value of a specified key from the metadata of a gRPC context.
