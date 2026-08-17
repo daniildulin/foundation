@@ -68,6 +68,15 @@ func (o *OutboxCourier) Start(outboxOpts *OutboxCourierOptions) {
 
 func (o *OutboxCourier) newProcessFunc(batchSize int32) func(ctx context.Context) ferr.FoundationError {
 	return func(ctx context.Context) ferr.FoundationError {
+		// Once a batch has been written to Kafka it has to reach the COMMIT
+		// that deletes it from the outbox — otherwise the next run publishes
+		// the same events again. A shutdown arriving mid-batch must therefore
+		// not cancel the batch; detach from the signal and bound the work with
+		// a deadline of its own instead. The worker loop waits for the
+		// iteration to finish before components are stopped.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), o.shutdownTimeout())
+		defer cancel()
+
 		pool := o.GetPostgreSQL()
 		tx, err := pool.Begin(ctx)
 		if err != nil {

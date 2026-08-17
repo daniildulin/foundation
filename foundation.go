@@ -19,6 +19,10 @@ import (
 
 const Version = "0.2.1"
 
+// DefaultShutdownTimeout is how long the service spends draining work in flight
+// before stopping its components.
+const DefaultShutdownTimeout = 30 * time.Second
+
 // Service represents a single microservice - part of the bigger Foundation-based application, which implements
 // an isolated domain of the application logic.
 type Service struct {
@@ -42,6 +46,12 @@ type Config struct {
 	Redis        *RedisConfig
 	Sentry       *SentryConfig
 	JobsEnqueuer *JobsEnqueuerConfig
+
+	// ShutdownTimeout bounds how long the service spends draining work in
+	// flight before it stops its components. Set it comfortably below the
+	// supervisor's own grace period (Kubernetes' terminationGracePeriodSeconds,
+	// for instance), so that the service finishes on its own terms.
+	ShutdownTimeout time.Duration
 }
 
 // DatabaseConfig represents the configuration of a PostgreSQL database.
@@ -193,7 +203,18 @@ func NewConfig() *Config {
 			Pool:      GetEnvOrInt("REDIS_POOL", 5),
 			Namespace: GetEnvOrString("REDIS_NAMESPACE", ""),
 		},
+		ShutdownTimeout: GetEnvOrDuration("SHUTDOWN_TIMEOUT", DefaultShutdownTimeout),
 	}
+}
+
+// shutdownTimeout returns the configured shutdown budget, falling back to the
+// default for services constructed without a Config.
+func (s *Service) shutdownTimeout() time.Duration {
+	if s.Config != nil && s.Config.ShutdownTimeout > 0 {
+		return s.Config.ShutdownTimeout
+	}
+
+	return DefaultShutdownTimeout
 }
 
 // Init initializes the Foundation service.
