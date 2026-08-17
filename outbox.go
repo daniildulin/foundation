@@ -218,7 +218,9 @@ func (s *Service) WithResponseTransaction(ctx context.Context, f func(tx pgx.Tx)
 	return response, nil
 }
 
-// ListOutboxEvents returns a list of outbox events in the order they were created.
+// ListOutboxEvents returns a batch of outbox events in the order they were
+// created, locking them for the duration of the transaction and skipping rows
+// another courier already holds.
 func (s *Service) ListOutboxEvents(ctx context.Context, tx pgx.Tx, limit int32) ([]outboxrepo.FoundationOutboxEvent, ferr.FoundationError) {
 	queries := outboxrepo.New(tx)
 
@@ -230,11 +232,20 @@ func (s *Service) ListOutboxEvents(ctx context.Context, tx pgx.Tx, limit int32) 
 	return events, nil
 }
 
-// DeleteOutboxEvents deletes outbox events up to (and including) the given ID.
-func (s *Service) DeleteOutboxEvents(ctx context.Context, tx pgx.Tx, maxID int64) ferr.FoundationError {
+// DeleteOutboxEvents deletes the outbox events with the given IDs.
+//
+// It deletes exactly what was published, by ID. Deleting everything up to a
+// maximum ID — as this used to — also removes rows a concurrent courier has
+// locked but not yet committed; if that courier then rolls back, those events
+// are gone without ever having been published.
+func (s *Service) DeleteOutboxEvents(ctx context.Context, tx pgx.Tx, ids []int64) ferr.FoundationError {
+	if len(ids) == 0 {
+		return nil
+	}
+
 	queries := outboxrepo.New(tx)
 
-	if err := queries.DeleteOutboxEvents(ctx, maxID); err != nil {
+	if err := queries.DeleteOutboxEvents(ctx, ids); err != nil {
 		return ferr.NewInternalError(err, "failed to `DeleteOutboxEvents`")
 	}
 

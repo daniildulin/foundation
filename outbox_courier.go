@@ -107,7 +107,8 @@ func (o *OutboxCourier) newProcessFunc(batchSize int32) func(ctx context.Context
 			fmetrics.OutboxOldestEventAge.Set(time.Since(oldest.Time).Seconds())
 		}
 
-		maxId := outboxEvents[len(outboxEvents)-1].ID
+		publishedIDs := make([]int64, 0, len(outboxEvents))
+
 		for _, outboxEvent := range outboxEvents {
 			headers := make(map[string]string)
 			if err = json.Unmarshal(outboxEvent.Headers, &headers); err != nil {
@@ -126,9 +127,11 @@ func (o *OutboxCourier) newProcessFunc(batchSize int32) func(ctx context.Context
 			if err = o.PublishEvent(fctx.WithCorrelationID(ctx, headers[fkafka.HeaderCorrelationID]), event, tx); err != nil {
 				return ferr.NewInternalError(err, "failed to publish event")
 			}
+
+			publishedIDs = append(publishedIDs, outboxEvent.ID)
 		}
 
-		if err = o.DeleteOutboxEvents(ctx, tx, maxId); err != nil {
+		if err = o.DeleteOutboxEvents(ctx, tx, publishedIDs); err != nil {
 			return ferr.NewInternalError(err, "failed to delete outbox events")
 		}
 
