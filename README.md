@@ -82,6 +82,11 @@ foundation new         # Create `--app` or `--service`
 
 You can also run `foundation` without any arguments to see a list of available commands, or run `foundation <command> --help` to see the available options for a specific command.
 
+## ⬆️ Upgrading
+
+Breaking changes and behaviour changes between releases are listed in
+[MIGRATION.md](./MIGRATION.md).
+
 ## 🔒 Trust boundary
 
 The gateway authenticates a request and forwards the caller's identity to
