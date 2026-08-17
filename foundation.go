@@ -8,7 +8,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/sirupsen/logrus"
 
 	fjobs "github.com/foundation-go/foundation/jobs"
@@ -108,6 +107,14 @@ type MetricsConfig struct {
 type SentryConfig struct {
 	DSN     string
 	Enabled bool
+	// Environment separates events coming from development, test and
+	// production. Defaults to FOUNDATION_ENV.
+	Environment string
+	// Release is reported with every event. Defaults to SENTRY_RELEASE.
+	Release string
+	// FlushTimeout is how long the service waits for buffered events to reach
+	// Sentry before exiting.
+	FlushTimeout time.Duration
 }
 
 // OutboxConfig represents the configuration of an outbox.
@@ -174,8 +181,11 @@ func NewConfig() *Config {
 			URL:     GetEnvOrString("REDIS_URL", ""),
 		},
 		Sentry: &SentryConfig{
-			DSN:     GetEnvOrString("SENTRY_DSN", ""),
-			Enabled: len(GetEnvOrString("SENTRY_DSN", "")) > 0,
+			DSN:          GetEnvOrString("SENTRY_DSN", ""),
+			Enabled:      len(GetEnvOrString("SENTRY_DSN", "")) > 0,
+			Environment:  GetEnvOrString("SENTRY_ENVIRONMENT", string(FoundationEnv())),
+			Release:      GetEnvOrString("SENTRY_RELEASE", ""),
+			FlushTimeout: GetEnvOrDuration("SENTRY_FLUSH_TIMEOUT", fsentry.DefaultFlushTimeout),
 		},
 		JobsEnqueuer: &JobsEnqueuerConfig{
 			Enabled:   false,
@@ -247,7 +257,12 @@ func (s *Service) addSystemComponents() error {
 
 	// Sentry
 	if s.Config.Sentry.Enabled {
-		s.Components = append(s.Components, fsentry.NewComponent(s.Config.Sentry.DSN))
+		s.Components = append(s.Components, fsentry.NewComponent(
+			s.Config.Sentry.DSN,
+			fsentry.WithEnvironment(s.Config.Sentry.Environment),
+			fsentry.WithRelease(s.Config.Sentry.Release),
+			fsentry.WithFlushTimeout(s.Config.Sentry.FlushTimeout),
+		))
 	}
 
 	// PostgreSQL
@@ -368,9 +383,7 @@ func (s *Service) StopComponents() {
 		s.Logger.Infof(" - %s", s.Components[i].Name())
 
 		if err := s.Components[i].Stop(); err != nil {
-			err = fmt.Errorf("failed to stop component `%s`: %w", s.Components[i].Name(), err)
-			sentry.CaptureException(err)
-			s.Logger.Error(err)
+			s.CaptureError(err, fmt.Sprintf("failed to stop component `%s`", s.Components[i].Name()))
 		}
 	}
 }
@@ -393,9 +406,7 @@ func (s *Service) Start(opts *StartOptions) {
 
 	// Start common components
 	if err := s.StartComponents(opts.StartComponentsOptions...); err != nil {
-		err = fmt.Errorf("failed to start components: %w", err)
-		sentry.CaptureException(err)
-		s.Logger.Fatalf("Failed to start components: %v", err)
+		s.Fatal(err, "failed to start components")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -405,9 +416,7 @@ func (s *Service) Start(opts *StartOptions) {
 
 	// Run the actual service code
 	if err := opts.ServiceFunc(ctx); err != nil {
-		err = fmt.Errorf("failed to start service: %w", err)
-		sentry.CaptureException(err)
-		s.Logger.Fatalf("Failed to start service: %v", err)
+		s.Fatal(err, "failed to start service")
 	}
 
 	<-ctx.Done()

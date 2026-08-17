@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-
-	"github.com/getsentry/sentry-go"
 )
 
 // HTTPServer represents a HTTP Server mode Foundation service.
@@ -59,9 +57,7 @@ func (s *HTTPServer) ServiceFunc(ctx context.Context) error {
 
 	go func() {
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			err = fmt.Errorf("failed to start HTTP server: %w", err)
-			sentry.CaptureException(err)
-			s.Logger.Fatal(err)
+			s.Fatal(err, "failed to start HTTP server")
 		}
 	}()
 
@@ -69,9 +65,7 @@ func (s *HTTPServer) ServiceFunc(ctx context.Context) error {
 
 	// Gracefully stop the HTTP server
 	if err := server.Shutdown(context.Background()); err != nil {
-		err = fmt.Errorf("failed to gracefully shutdown HTTP server: %w", err)
-		sentry.CaptureException(err)
-		s.Logger.Fatal(err)
+		s.CaptureError(err, "failed to gracefully shutdown HTTP server")
 	}
 
 	return nil

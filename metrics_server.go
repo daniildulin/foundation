@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/getsentry/sentry-go"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
+
+	fsentry "github.com/foundation-go/foundation/sentry"
 )
 
 const (
@@ -72,7 +73,7 @@ func (c *MetricsServerComponent) Start() error {
 	go func() {
 		if err := c.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			err = fmt.Errorf("failed to start metrics server: %w", err)
-			sentry.CaptureException(err)
+			fsentry.CaptureAndFlush(err, fsentry.DefaultFlushTimeout)
 			c.logger.Fatal(err)
 		}
 	}()

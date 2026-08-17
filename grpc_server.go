@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/getsentry/sentry-go"
 	"google.golang.org/grpc"
 
 	fg "github.com/foundation-go/foundation/grpc"
@@ -92,9 +91,7 @@ func (s *GRPCServer) ServiceFunc(ctx context.Context) error {
 
 	go func() {
 		if err := server.Serve(listener); err != nil {
-			err = fmt.Errorf("failed to start server: %w", err)
-			sentry.CaptureException(err)
-			s.Logger.Fatal(err)
+			s.Fatal(err, "failed to serve gRPC")
 		}
 	}()
 
@@ -110,9 +107,7 @@ func (s *Service) acquireListener() net.Listener {
 	port := GetEnvOrInt("PORT", 51051)
 	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
 	if err != nil {
-		err = fmt.Errorf("failed to listen port %d: %w", port, err)
-		sentry.CaptureException(err)
-		s.Logger.Fatal(err)
+		s.Fatal(err, fmt.Sprintf("failed to listen on port %d", port))
 	}
 
 	s.Logger.Infof("Listening on http://0.0.0.0:%d", port)

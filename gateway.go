@@ -9,7 +9,6 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/getsentry/sentry-go"
 	gwruntime "github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"google.golang.org/protobuf/encoding/protojson"
 
@@ -166,9 +165,7 @@ func (s *Gateway) ServiceFunc(ctx context.Context) error {
 
 	go func() {
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			err = fmt.Errorf("failed to start server: %w", err)
-			sentry.CaptureException(err)
-			s.Logger.Fatal(err)
+			s.Fatal(err, "failed to start gateway HTTP server")
 		}
 	}()
 

@@ -2,11 +2,9 @@ package foundation
 
 import (
 	"context"
-	"fmt"
 
 	cablegrpc "github.com/foundation-go/foundation/cable/grpc"
 	pb "github.com/foundation-go/foundation/cable/grpc/proto"
-	"github.com/getsentry/sentry-go"
 	"google.golang.org/grpc"
 )
 
@@ -86,9 +84,7 @@ func (s *CableGRPC) ServiceFunc(ctx context.Context) error {
 
 	go func() {
 		if err := server.Serve(listener); err != nil {
-			err = fmt.Errorf("failed to start server: %w", err)
-			sentry.CaptureException(err)
-			s.Logger.Fatal(err)
+			s.Fatal(err, "failed to serve cable gRPC")
 		}
 	}()
 
