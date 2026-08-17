@@ -4,10 +4,34 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
-	_ "github.com/joho/godotenv/autoload"
+	"github.com/joho/godotenv"
 )
+
+var loadEnvOnce sync.Once
+
+// LoadEnv reads a `.env` file from the working directory into the process
+// environment. Variables already set are left alone, and a missing file is not
+// an error. It runs at most once.
+//
+// This used to be a blank import of `godotenv/autoload`, so merely importing
+// the framework read a file off disk and mutated the process environment — a
+// surprise for anything that imports Foundation as a library, and impossible to
+// opt out of. Foundation calls it from Init and from the CLI; set
+// FOUNDATION_SKIP_DOTENV to skip it.
+func LoadEnv() {
+	loadEnvOnce.Do(func() {
+		if os.Getenv("FOUNDATION_SKIP_DOTENV") != "" {
+			return
+		}
+
+		// The only error worth acting on would be a malformed file, and there
+		// is no logger yet at this point in startup.
+		_ = godotenv.Load()
+	})
+}
 
 // Env represents the service environment name (development, production, etc).
 type Env string

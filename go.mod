@@ -6,6 +6,7 @@ toolchain go1.23.3
 
 require (
 	github.com/AlecAivazis/survey/v2 v2.3.7
+	github.com/BurntSushi/toml v1.6.0
 	github.com/getsentry/sentry-go v0.31.1
 	github.com/gocraft/work v0.5.1
 	github.com/golang-migrate/migrate/v4 v4.18.1
@@ -19,7 +20,6 @@ require (
 	github.com/prometheus/client_golang v1.20.5
 	github.com/redis/go-redis/v9 v9.7.0
 	github.com/robfig/cron v1.2.0
-	github.com/rs/zerolog v1.33.0
 	github.com/segmentio/kafka-go v0.4.47
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/cobra v1.8.1

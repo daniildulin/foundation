@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/signal"
+	"runtime/debug"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -18,7 +19,40 @@ import (
 	fsentry "github.com/foundation-go/foundation/sentry"
 )
 
-const Version = "0.2.1"
+// Version is the Foundation release the service was built against.
+//
+// The constant is the fallback: when the framework is consumed as a module the
+// real version comes from the build information, so it no longer drifts from
+// whatever the constant was last set to by hand.
+var Version = versionFromBuildInfo(defaultVersion)
+
+// defaultVersion is reported when the build carries no module information, as
+// in `go run` and in the framework's own tests.
+const defaultVersion = "0.3.0"
+
+// versionFromBuildInfo reads the version of the Foundation module from the
+// running binary's build information.
+func versionFromBuildInfo(fallback string) string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return fallback
+	}
+
+	if info.Main.Path == modulePath && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+
+	for _, dep := range info.Deps {
+		if dep.Path == modulePath && dep.Version != "" {
+			return dep.Version
+		}
+	}
+
+	return fallback
+}
+
+// modulePath is this module's import path.
+const modulePath = "github.com/foundation-go/foundation"
 
 // DefaultShutdownTimeout is how long the service spends draining work in flight
 // before stopping its components.
@@ -279,6 +313,8 @@ func (s *Service) shutdownTimeout() time.Duration {
 
 // Init initializes the Foundation service.
 func Init(name string) *Service {
+	LoadEnv()
+
 	return &Service{
 		Name:   name,
 		Config: NewConfig(),

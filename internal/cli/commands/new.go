@@ -2,12 +2,11 @@ package commands
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
 	f "github.com/foundation-go/foundation"
@@ -41,7 +40,7 @@ var New = &cobra.Command{
 	Run: func(cmd *cobra.Command, _ []string) {
 		serviceFlag, err := cmd.Flags().GetBool("service")
 		if err != nil {
-			log.Fatal().Err(err).Msg("Failed to get `--service` flag")
+			log.Fatalf("Failed to get `--service` flag: %v", err)
 		}
 
 		rawName := cmd.Flag("name").Value.String()
@@ -63,9 +62,9 @@ func newApplication(input *newInput) {
 
 	shortName := extractShortName(input.Name)
 	if helpers.InGitRepository() {
-		log.Info().Msg("Git repository already exists, skipping initialization")
+		log.Print("Git repository already exists, skipping initialization")
 	} else if err := helpers.RunCommand(shortName, "git", "init"); err != nil {
-		log.Fatal().Err(err).Msg("Failed to initialize Git repository")
+		log.Fatalf("Failed to initialize Git repository: %v", err)
 	}
 }
 
@@ -73,7 +72,7 @@ func newService(input *newInput) {
 	appRoot := helpers.GetApplicationRoot()
 
 	if err := os.Chdir(appRoot); err != nil {
-		log.Fatal().Err(err).Msg("Failed to change directory to application root")
+		log.Fatalf("Failed to change directory to application root: %v", err)
 	}
 
 	newEntity(input, "service", newServiceFiles)
@@ -83,21 +82,21 @@ func newService(input *newInput) {
 	// Construct the proper module name for the service
 	moduleName, err := helpers.ConstructServiceModuleName(input.Name)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to construct service module name")
+		log.Fatalf("Failed to construct service module name: %v", err)
 	}
 
 	// Initialize Go module with the constructed module name
 	if err := helpers.RunCommand(shortName, "go", "mod", "init", moduleName); err != nil {
-		log.Fatal().Err(err).Msg("Failed to initialize Go module")
+		log.Fatalf("Failed to initialize Go module: %v", err)
 	}
 
 	// Ensure go.work exists and add the service to it
 	if err := ensureGoWorkspace(appRoot, shortName); err != nil {
-		log.Fatal().Err(err).Msg("Failed to setup Go workspace")
+		log.Fatalf("Failed to setup Go workspace: %v", err)
 	}
 
 	if err := helpers.RunCommand(shortName, "go", "mod", "tidy"); err != nil {
-		log.Fatal().Err(err).Msg("Failed to `go mod tidy`")
+		log.Fatalf("Failed to `go mod tidy`: %v", err)
 	}
 
 	// Copying with Go rather than shelling out to `cp`, which does not exist on
@@ -106,7 +105,7 @@ func newService(input *newInput) {
 		filepath.Join(shortName, ".env.example"),
 		filepath.Join(shortName, ".env"),
 	); err != nil {
-		log.Fatal().Err(err).Msg("Failed to copy `.env.example` to `.env`")
+		log.Fatalf("Failed to copy `.env.example` to `.env`: %v", err)
 	}
 }
 
@@ -134,30 +133,23 @@ func ensureGoWorkspace(appRoot, serviceName string) error {
 // extractShortName extracts the short name from a full module path
 // e.g., "github.com/paylitech/backend" -> "backend"
 func extractShortName(name string) string {
-	if !strings.Contains(name, "/") {
-		return name
+	if index := strings.LastIndex(name, "/"); index != -1 {
+		return name[index+1:]
 	}
 
-	parts := strings.Split(name, "/")
-	if len(parts) > 0 {
-		return parts[len(parts)-1]
-	}
-
-	log.Fatal().Str("name", name).Msg("Failed to extract short name from module path")
 	return name
 }
 
 func newEntity(input *newInput, entity string, files []string) {
 	shortName := extractShortName(input.Name)
-	log.Info().Str("name", shortName).Msg(fmt.Sprintf("Creating a new Foundation %s", entity))
-	log.Info().Msg("")
+	log.Printf("Creating a new Foundation %s: %s", entity, shortName)
 
 	if _, err := os.Stat(shortName); !os.IsNotExist(err) {
-		log.Fatal().Str("dirname", shortName).Msg("Directory already exists")
+		log.Fatalf("Directory already exists: %s", shortName)
 	}
 
 	if err := os.Mkdir(shortName, 0755); err != nil {
-		log.Fatal().Err(err).Str("dirname", shortName).Msg("Failed to create directory")
+		log.Fatalf("Failed to create directory (%s): %v", shortName, err)
 	}
 
 	templateData := map[string]interface{}{
@@ -170,28 +162,27 @@ func newEntity(input *newInput, entity string, files []string) {
 		"ShortName": shortName,
 	}
 
-	log.Info().Msg("Creating files:")
+	log.Print("Creating files:")
 	for _, file := range files {
 		if strings.Contains(file, "/") {
 			dir := filepath.Dir(file)
 			if err := os.MkdirAll(filepath.Join(shortName, dir), 0755); err != nil {
-				log.Fatal().Err(err).Str("dirname", dir).Msg("Failed to create directory")
+				log.Fatalf("Failed to create directory (%s): %v", dir, err)
 			}
 		}
 
 		if err := templates.CreateFromTemplate(shortName, entity, file, templateData); err != nil {
-			log.Fatal().Err(err).Str("filename", file).Msg("Failed to create file")
+			log.Fatalf("Failed to create file (%s): %v", file, err)
 		}
 
-		log.Info().Msg(fmt.Sprintf(" - %s", file))
+		log.Printf(" - %s", file)
 	}
 }
 
 func init() {
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout})
 	New.Flags().StringP("name", "n", "", "Name of the new application or service")
 	if err := New.MarkFlagRequired("name"); err != nil {
-		log.Fatal().Err(err).Msg("Failed to mark `--name` flag as required")
+		log.Fatalf("Failed to mark `--name` flag as required: %v", err)
 	}
 
 	New.Flags().BoolP("app", "a", false, "Create a new application")
