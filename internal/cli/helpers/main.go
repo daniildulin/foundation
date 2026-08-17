@@ -147,6 +147,22 @@ func BuiltOnFoundation() bool {
 	return true
 }
 
+// CopyFile copies src to dst, preserving nothing but the contents.
+//
+// Used instead of shelling out to `cp`, which does not exist on Windows.
+func CopyFile(src, dst string) error {
+	content, err := os.ReadFile(src) // #nosec G304 -- paths come from the CLI's own scaffolding
+	if err != nil {
+		return fmt.Errorf("failed to read %s: %w", src, err)
+	}
+
+	if err := os.WriteFile(dst, content, 0o600); err != nil {
+		return fmt.Errorf("failed to write %s: %w", dst, err)
+	}
+
+	return nil
+}
+
 func RunCommand(dir string, name string, args ...string) error {
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
@@ -158,9 +174,15 @@ func RunCommand(dir string, name string, args ...string) error {
 
 func InGitRepository() bool {
 	cmd := exec.Command("git", "rev-parse", "--is-inside-work-tree")
-	output, err := cmd.Output()
 
-	return err == nil && string(output) == "true\n"
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+
+	// Trimming rather than comparing to "true\n": the line ending is "\r\n" on
+	// Windows, where this always reported false.
+	return strings.TrimSpace(string(output)) == "true"
 }
 
 // FoundationConfig represents the structure of foundation.toml

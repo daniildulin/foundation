@@ -9,6 +9,7 @@ import (
 func main() {
 	var rootCmd = &cobra.Command{Use: "foundation"}
 	rootCmd.AddCommand(
+		c.DBForce,
 		c.DBMigrate,
 		c.DBRollback,
 		c.InitOutbox,

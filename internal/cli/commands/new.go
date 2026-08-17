@@ -100,7 +100,12 @@ func newService(input *newInput) {
 		log.Fatal().Err(err).Msg("Failed to `go mod tidy`")
 	}
 
-	if err := helpers.RunCommand(shortName, "cp", ".env.example", ".env"); err != nil {
+	// Copying with Go rather than shelling out to `cp`, which does not exist on
+	// Windows.
+	if err := helpers.CopyFile(
+		filepath.Join(shortName, ".env.example"),
+		filepath.Join(shortName, ".env"),
+	); err != nil {
 		log.Fatal().Err(err).Msg("Failed to copy `.env.example` to `.env`")
 	}
 }
@@ -157,7 +162,12 @@ func newEntity(input *newInput, entity string, files []string) {
 
 	templateData := map[string]interface{}{
 		"FoundationVersion": input.FoundationVersion,
-		"Name":              input.Name,
+		// Name is what the user typed, which may be a full module path;
+		// ShortName is the directory and the identifier used in code. Templates
+		// that used Name for both produced a database called
+		// "github.com/org/service".
+		"Name":      input.Name,
+		"ShortName": shortName,
 	}
 
 	log.Info().Msg("Creating files:")

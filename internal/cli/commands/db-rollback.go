@@ -3,16 +3,15 @@ package commands
 import (
 	"fmt"
 	"log"
-	"os"
 
-	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/spf13/cobra"
-
-	f "github.com/foundation-go/foundation"
-	h "github.com/foundation-go/foundation/internal/cli/helpers"
 )
+
+// rollbackStepsFlag is referenced both when the flag is registered and when it
+// is read, so the two cannot drift apart again.
+const rollbackStepsFlag = "steps"
 
 var DBRollback = &cobra.Command{
 	Use:     "db:rollback",
@@ -20,55 +19,25 @@ var DBRollback = &cobra.Command{
 	Short:   "Rollback database migrations",
 	Long:    "Rollback database migrations by a given number of steps, e.g.: `foundation db:rollback --steps 2`",
 	Run: func(cmd *cobra.Command, _ []string) {
-		var dir string
-		databaseURL := f.GetEnvOrString("DATABASE_URL", "")
-
-		if f.IsProductionEnv() {
-			dir = cmd.Flag("dir").Value.String()
-			if dir == "" {
-				log.Fatal("You should specify the directory containing migrations with the `--dir` flag")
-			}
-		} else {
-			if !h.BuiltOnFoundation() {
-				log.Fatal("This command must be run from inside a Foundation service")
-			}
-
-			dir = h.AtServiceRoot(MigrationsDirectory)
+		dir, err := migrationsDir(cmd.Flag("dir").Value.String())
+		if err != nil {
+			log.Fatal(err)
 		}
 
-		// Check if migrations directory exists
-		_, err := os.Stat(dir)
-		if os.IsNotExist(err) {
-			log.Fatalf("Migrations directory `%s` does not exist", dir)
-		}
-
-		// Parse `steps` flag
 		steps, err := rollbackSteps(cmd)
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		// Check if `DATABASE_URL` environment variable is set
-		if databaseURL == "" {
-			log.Fatal("`DATABASE_URL` environment variable is not set")
-		}
-
-		// Initialize migrator
-		m, err := migrate.New(fmt.Sprintf("file://%s", dir), databaseURL)
+		m, err := newMigrator(dir)
 		if err != nil {
 			log.Fatal(err)
 		}
+		defer closeMigrator(m)
 
-		// Rollback migrations
-		if err = m.Steps(-1 * steps); err != nil {
-			log.Fatal(err)
-		}
+		reportMigrationResult(m.Steps(-1*steps), "Nothing to roll back")
 	},
 }
-
-// rollbackStepsFlag is referenced both when the flag is registered and when it
-// is read, so the two cannot drift apart again.
-const rollbackStepsFlag = "steps"
 
 // rollbackSteps reads and validates the number of migrations to roll back.
 func rollbackSteps(cmd *cobra.Command) (int, error) {
