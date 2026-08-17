@@ -4,10 +4,11 @@ import (
 	"context"
 	"fmt"
 
+	"google.golang.org/grpc"
+
 	cablegrpc "github.com/foundation-go/foundation/cable/grpc"
 	pb "github.com/foundation-go/foundation/cable/grpc/proto"
 	fg "github.com/foundation-go/foundation/grpc"
-	"google.golang.org/grpc"
 )
 
 // CableGRPC is a Foundation service in AnyCable gRPC Server mode.
@@ -92,7 +93,7 @@ func (s *CableGRPC) ServiceFunc(ctx context.Context) error {
 	serverOptions := append(defaultOptions, s.Options.GRPCServerOptions...)
 
 	// Start the server
-	listener := s.acquireListener()
+	listener := s.acquireListener(ctx)
 	server := grpc.NewServer(serverOptions...)
 
 	pb.RegisterRPCServer(server, &cablegrpc.Server{

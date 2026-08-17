@@ -73,9 +73,15 @@ type Server struct {
 	Logger *logrus.Entry
 }
 
-// ConnIdentifier is used to identify a specific connection through its AccessToken.
+// ConnIdentifier identifies a specific connection.
+//
+// It used to hold the raw access token. AnyCable stores the identifier for the
+// life of the connection and hands it back with every command, so the token sat
+// in that state for no reason: nothing ever read it back, it only had to be
+// unique per connection. A random ID does that without keeping a credential
+// around.
 type ConnIdentifier struct {
-	AccessToken string
+	ConnectionID string `json:"connectionId"`
 }
 
 func (s *Server) Connect(ctx context.Context, in *pb.ConnectionRequest) (*pb.ConnectionResponse, error) {
@@ -94,7 +100,6 @@ func (s *Server) Connect(ctx context.Context, in *pb.ConnectionRequest) (*pb.Con
 		Transmissions: []string{ConnectionUnauthorizedMessage},
 	}
 
-	var accessToken string
 	cState := in.Env.Cstate
 	if cState == nil {
 		cState = make(map[string]string)
@@ -110,7 +115,7 @@ func (s *Server) Connect(ctx context.Context, in *pb.ConnectionRequest) (*pb.Con
 			return unauthenticatedResp, nil
 		}
 
-		accessToken = accessTokenFrom(in.Env)
+		accessToken := accessTokenFrom(in.Env)
 		if accessToken == "" {
 			return unauthenticatedResp, nil
 		}
@@ -125,13 +130,11 @@ func (s *Server) Connect(ctx context.Context, in *pb.ConnectionRequest) (*pb.Con
 		cState[UserIDKey] = userID
 		cState[IsAuthenticatedKey] = "true"
 	} else {
-		// We need an `accessToken` to identify the connection, so we generate a random one
-		accessToken = fmt.Sprintf("foundationGuest-%s", uuid.New().String())
 		cState[IsAuthenticatedKey] = "false"
 	}
 
 	ident := &ConnIdentifier{
-		AccessToken: accessToken,
+		ConnectionID: uuid.New().String(),
 	}
 	identJSON, err := json.Marshal(ident)
 	if err != nil {

@@ -4,13 +4,14 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/getsentry/sentry-go"
+	"github.com/sirupsen/logrus"
+	"google.golang.org/protobuf/proto"
+
 	cablecourier "github.com/foundation-go/foundation/cable/courier"
 	ferr "github.com/foundation-go/foundation/errors"
 	ferrpb "github.com/foundation-go/foundation/errors/proto"
 	fkafka "github.com/foundation-go/foundation/kafka"
-	"github.com/getsentry/sentry-go"
-	"github.com/sirupsen/logrus"
-	"google.golang.org/protobuf/proto"
 )
 
 // CableCourier is a mode in which events are received from Kafka and published

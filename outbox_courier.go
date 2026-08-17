@@ -145,7 +145,7 @@ func (o *OutboxCourier) newProcessFunc(batchSize int32) func(ctx context.Context
 
 		// A full batch means there is probably more waiting; a partial one
 		// means the outbox has been drained.
-		if int32(len(outboxEvents)) < batchSize {
+		if len(outboxEvents) < int(batchSize) {
 			fmetrics.OutboxPendingEvents.Set(0)
 		} else {
 			fmetrics.OutboxPendingEvents.Set(float64(len(outboxEvents)))

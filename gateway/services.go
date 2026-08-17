@@ -71,10 +71,13 @@ func (m *Mux) Close() error {
 	return nil
 }
 
-func RegisterServices(services []*Service, opts *RegisterServicesOptions) (*Mux, error) {
-	// The generated registration hangs each connection's lifetime off this
-	// context, so cancelling it on shutdown is what closes them.
-	ctx, cancel := context.WithCancel(context.Background())
+// RegisterServices builds the gateway mux and dials the downstream services.
+//
+// The connections live as long as ctx: grpc-gateway's generated registration
+// closes each one when the context it was given is cancelled. Pass the service
+// context, or call Mux.Close.
+func RegisterServices(ctx context.Context, services []*Service, opts *RegisterServicesOptions) (*Mux, error) {
+	ctx, cancel := context.WithCancel(ctx)
 
 	// N.B.: the error handler is applied FIRST, so a caller-supplied
 	// WithErrorHandler in MuxOpts wins. Appending it last, as this used to,
@@ -151,6 +154,8 @@ func newTLSCredentials(dir string) (credentials.TransportCredentials, error) {
 		return nil, fmt.Errorf("failed to load client certificate: %w", err)
 	}
 
+	// #nosec G304 -- the path is assembled from an operator-supplied
+	// certificate directory, which is configuration rather than user input.
 	caCert, err := os.ReadFile(caFile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read CA certificate: %w", err)

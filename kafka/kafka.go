@@ -473,6 +473,8 @@ func newTLSConfig(dir string) (*tls.Config, error) {
 		return nil, fmt.Errorf("failed to load the Kafka client certificate from %s: %w", dir, err)
 	}
 
+	// #nosec G304 -- the path is assembled from an operator-supplied
+	// certificate directory, which is configuration rather than user input.
 	caCert, err := os.ReadFile(caFile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read the Kafka CA certificate: %w", err)

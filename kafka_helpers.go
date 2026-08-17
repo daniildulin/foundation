@@ -52,7 +52,7 @@ func (s *Service) GetKafkaConsumer() *kafka.Reader {
 func (s *Service) TryGetKafkaConsumer() (*kafka.Reader, error) {
 	component := s.GetComponent(fkafka.ConsumerComponentName)
 	if component == nil {
-		return nil, errors.New("Kafka consumer component is not registered: use foundation.WithKafkaConsumer()")
+		return nil, errors.New("no Kafka consumer component is registered: use foundation.WithKafkaConsumer()")
 	}
 
 	consumer, ok := component.(*fkafka.ConsumerComponent)
@@ -63,7 +63,7 @@ func (s *Service) TryGetKafkaConsumer() (*kafka.Reader, error) {
 	}
 
 	if consumer.Consumer == nil {
-		return nil, errors.New("Kafka consumer component has not been started yet")
+		return nil, errors.New("the Kafka consumer component has not been started yet")
 	}
 
 	return consumer.Consumer, nil
@@ -87,7 +87,7 @@ func (s *Service) GetKafkaProducer() *kafka.Writer {
 func (s *Service) TryGetKafkaProducer() (*kafka.Writer, error) {
 	component := s.GetComponent(fkafka.ProducerComponentName)
 	if component == nil {
-		return nil, errors.New("Kafka producer component is not registered: use foundation.WithKafkaProducer()")
+		return nil, errors.New("no Kafka producer component is registered: use foundation.WithKafkaProducer()")
 	}
 
 	producer, ok := component.(*fkafka.ProducerComponent)
@@ -98,7 +98,7 @@ func (s *Service) TryGetKafkaProducer() (*kafka.Writer, error) {
 	}
 
 	if producer.Producer == nil {
-		return nil, errors.New("Kafka producer component has not been started yet")
+		return nil, errors.New("the Kafka producer component has not been started yet")
 	}
 
 	return producer.Producer, nil

@@ -30,7 +30,7 @@ func (s *Service) GetPostgreSQL() *pgxpool.Pool {
 func (s *Service) TryGetPostgreSQL() (*pgxpool.Pool, error) {
 	component := s.GetComponent(fpg.ComponentName)
 	if component == nil {
-		return nil, errors.New("PostgreSQL component is not registered: set DATABASE_URL to enable it")
+		return nil, errors.New("no PostgreSQL component is registered: set DATABASE_URL to enable it")
 	}
 
 	pg, ok := component.(*fpg.Component)
@@ -39,7 +39,7 @@ func (s *Service) TryGetPostgreSQL() (*pgxpool.Pool, error) {
 	}
 
 	if pg.Connection == nil {
-		return nil, errors.New("PostgreSQL component has not been started yet")
+		return nil, errors.New("the PostgreSQL component has not been started yet")
 	}
 
 	return pg.Connection, nil

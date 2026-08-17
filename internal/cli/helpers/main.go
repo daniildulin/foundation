@@ -184,11 +184,11 @@ func ParseFoundationToml(path string) (*FoundationConfig, error) {
 
 	config := &FoundationConfig{}
 	scanner := bufio.NewScanner(file)
-	
+
 	inAppSection := false
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		
+
 		if line == "[app]" {
 			inAppSection = true
 			continue
@@ -196,13 +196,13 @@ func ParseFoundationToml(path string) (*FoundationConfig, error) {
 			inAppSection = false
 			continue
 		}
-		
+
 		if inAppSection && strings.Contains(line, "=") {
 			parts := strings.SplitN(line, "=", 2)
 			if len(parts) == 2 {
 				key := strings.TrimSpace(parts[0])
 				value := strings.Trim(strings.TrimSpace(parts[1]), `"`)
-				
+
 				switch key {
 				case "name":
 					config.App.Name = value
@@ -251,7 +251,7 @@ func ConstructServiceModuleName(serviceName string) (string, error) {
 // inferServiceModuleFromWorkspace tries to infer the full service module path from existing workspace
 func inferServiceModuleFromWorkspace(appName, serviceName string) (string, error) {
 	appRoot := GetApplicationRoot()
-	
+
 	// Check for go.work first
 	goWorkPath := filepath.Join(appRoot, "go.work")
 	if _, err := os.Stat(goWorkPath); err == nil {
@@ -279,7 +279,7 @@ func inferModuleFromGoWork(goWorkPath string) (string, error) {
 			servicePath := strings.Trim(line, `"./ `)
 			appRoot := filepath.Dir(goWorkPath)
 			goModPath := filepath.Join(appRoot, servicePath, "go.mod")
-			
+
 			if _, err := os.Stat(goModPath); err == nil {
 				if module, err := readModuleFromGoMod(goModPath); err == nil {
 					// Extract base module by removing the service name

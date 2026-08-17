@@ -8,13 +8,14 @@ import (
 	"sort"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/segmentio/kafka-go"
+	"google.golang.org/protobuf/proto"
+
 	fctx "github.com/foundation-go/foundation/context"
 	ferr "github.com/foundation-go/foundation/errors"
 	fkafka "github.com/foundation-go/foundation/kafka"
 	fmetrics "github.com/foundation-go/foundation/metrics"
-	"github.com/jackc/pgx/v5"
-	"github.com/segmentio/kafka-go"
-	"google.golang.org/protobuf/proto"
 )
 
 type EventsWorker struct {

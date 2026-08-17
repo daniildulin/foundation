@@ -4,11 +4,12 @@ import (
 	"context"
 	"strings"
 
-	fctx "github.com/foundation-go/foundation/context"
-	fhttp "github.com/foundation-go/foundation/http"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
+
+	fctx "github.com/foundation-go/foundation/context"
+	fhttp "github.com/foundation-go/foundation/http"
 )
 
 // MetadataUnaryInterceptor sets values passed by the gateway from the gRPC metadata into the context.

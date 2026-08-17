@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/getsentry/sentry-go"
+
 	ferr "github.com/foundation-go/foundation/errors"
 	fsentry "github.com/foundation-go/foundation/sentry"
-	"github.com/getsentry/sentry-go"
 )
 
 // sentryFlushTimeout returns how long the service is willing to wait for a

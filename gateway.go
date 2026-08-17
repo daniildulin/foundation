@@ -151,6 +151,7 @@ func (s *Gateway) ServiceFunc(ctx context.Context) error {
 	muxOpts = append(muxOpts, s.Options.MuxOpts...)
 
 	mux, err := gateway.RegisterServices(
+		ctx,
 		s.Options.Services,
 		&gateway.RegisterServicesOptions{
 			MuxOpts: muxOpts,

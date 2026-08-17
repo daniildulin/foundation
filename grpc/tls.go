@@ -30,6 +30,8 @@ func NewTLSConfig(tlsDir string) (credentials.TransportCredentials, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to load server certificate: %w", err)
 	}
+	// #nosec G304 -- the path is assembled from an operator-supplied
+	// certificate directory, which is configuration rather than user input.
 	caCert, err := os.ReadFile(caFile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read CA certificate: %w", err)

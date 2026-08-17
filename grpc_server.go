@@ -85,7 +85,7 @@ func (s *GRPCServer) ServiceFunc(ctx context.Context) error {
 	}
 
 	// Start the server
-	listener := s.acquireListener()
+	listener := s.acquireListener(ctx)
 	server := grpc.NewServer(serverOptions...)
 
 	s.Options.RegisterFunc(server)
@@ -131,9 +131,12 @@ func (s *Service) stopGRPCServer(server *grpc.Server) {
 	}
 }
 
-func (s *Service) acquireListener() net.Listener {
+func (s *Service) acquireListener(ctx context.Context) net.Listener {
 	port := GetEnvOrInt("PORT", DefaultPort)
-	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
+
+	var config net.ListenConfig
+
+	listener, err := config.Listen(ctx, "tcp", fmt.Sprintf("0.0.0.0:%d", port))
 	if err != nil {
 		s.Fatal(err, fmt.Sprintf("failed to listen on port %d", port))
 	}

@@ -14,6 +14,7 @@ import (
 
 func TestRegisterServicesRequiresAnEndpoint(t *testing.T) {
 	_, err := RegisterServices(
+		context.Background(),
 		[]*Service{{Name: "chats", Register: func(context.Context, *runtime.ServeMux, string, []grpc.DialOption) error {
 			return nil
 		}}},
@@ -33,6 +34,7 @@ func TestRegisterServicesEnablesRoundRobin(t *testing.T) {
 	var gotOpts []grpc.DialOption
 
 	mux, err := RegisterServices(
+		context.Background(),
 		[]*Service{{
 			Name: "chats",
 			Register: func(_ context.Context, _ *runtime.ServeMux, _ string, opts []grpc.DialOption) error {
@@ -59,6 +61,7 @@ func TestMuxCloseCancelsTheRegistrationContext(t *testing.T) {
 	var registrationCtx context.Context
 
 	mux, err := RegisterServices(
+		context.Background(),
 		[]*Service{{
 			Name: "chats",
 			Register: func(ctx context.Context, _ *runtime.ServeMux, _ string, _ []grpc.DialOption) error {
@@ -88,6 +91,7 @@ func TestCallerErrorHandlerOverridesTheDefault(t *testing.T) {
 	called := false
 
 	mux, err := RegisterServices(
+		context.Background(),
 		[]*Service{{
 			Name:     "chats",
 			Register: func(context.Context, *runtime.ServeMux, string, []grpc.DialOption) error { return nil },

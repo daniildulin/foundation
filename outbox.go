@@ -7,9 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/foundation-go/foundation/outboxrepo"
 	"github.com/jackc/pgx/v5"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/foundation-go/foundation/outboxrepo"
 
 	fctx "github.com/foundation-go/foundation/context"
 	ferr "github.com/foundation-go/foundation/errors"

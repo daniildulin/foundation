@@ -82,11 +82,11 @@ func BuildRedisPool(url string, poolSize int) (*redis.Pool, error) {
 	// startup error with a clear cause.
 	conn, err := pool.Dial()
 	if err != nil {
-		pool.Close() //nolint:errcheck // nothing was borrowed
+		_ = pool.Close() // nothing was borrowed
 
 		return nil, fmt.Errorf("failed to connect to Redis: %w", err)
 	}
-	conn.Close() //nolint:errcheck // returning the probe connection
+	_ = conn.Close() // returning the probe connection
 
 	return pool, nil
 }

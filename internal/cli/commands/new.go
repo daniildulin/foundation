@@ -79,7 +79,7 @@ func newService(input *newInput) {
 	newEntity(input, "service", newServiceFiles)
 
 	shortName := extractShortName(input.Name)
-	
+
 	// Construct the proper module name for the service
 	moduleName, err := helpers.ConstructServiceModuleName(input.Name)
 	if err != nil {
@@ -108,7 +108,7 @@ func newService(input *newInput) {
 // ensureGoWorkspace ensures that a go.work file exists and includes the service
 func ensureGoWorkspace(appRoot, serviceName string) error {
 	goWorkPath := filepath.Join(appRoot, "go.work")
-	
+
 	// Check if go.work already exists
 	if _, err := os.Stat(goWorkPath); os.IsNotExist(err) {
 		// Create new go.work file
@@ -116,13 +116,13 @@ func ensureGoWorkspace(appRoot, serviceName string) error {
 			return fmt.Errorf("failed to initialize go.work: %w", err)
 		}
 	}
-	
+
 	// Add the service to the workspace
 	serviceRelPath := "./" + serviceName
 	if err := helpers.RunCommand(appRoot, "go", "work", "use", serviceRelPath); err != nil {
 		return fmt.Errorf("failed to add service to workspace: %w", err)
 	}
-	
+
 	return nil
 }
 
@@ -132,12 +132,12 @@ func extractShortName(name string) string {
 	if !strings.Contains(name, "/") {
 		return name
 	}
-	
+
 	parts := strings.Split(name, "/")
 	if len(parts) > 0 {
 		return parts[len(parts)-1]
 	}
-	
+
 	log.Fatal().Str("name", name).Msg("Failed to extract short name from module path")
 	return name
 }

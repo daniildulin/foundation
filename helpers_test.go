@@ -28,13 +28,13 @@ func TestDependencyGettersReportMissingComponents(t *testing.T) {
 			name:    "postgresql",
 			try:     func() error { _, err := svc.TryGetPostgreSQL(); return err },
 			get:     func() { svc.GetPostgreSQL() },
-			wantErr: "PostgreSQL component is not registered",
+			wantErr: "no PostgreSQL component is registered",
 		},
 		{
 			name:    "redis",
 			try:     func() error { _, err := svc.TryGetRedis(); return err },
 			get:     func() { svc.GetRedis() },
-			wantErr: "Redis component is not registered",
+			wantErr: "no Redis component is registered",
 		},
 		{
 			name:    "jobs enqueuer",
@@ -46,13 +46,13 @@ func TestDependencyGettersReportMissingComponents(t *testing.T) {
 			name:    "kafka consumer",
 			try:     func() error { _, err := svc.TryGetKafkaConsumer(); return err },
 			get:     func() { svc.GetKafkaConsumer() },
-			wantErr: "Kafka consumer component is not registered",
+			wantErr: "no Kafka consumer component is registered",
 		},
 		{
 			name:    "kafka producer",
 			try:     func() error { _, err := svc.TryGetKafkaProducer(); return err },
 			get:     func() { svc.GetKafkaProducer() },
-			wantErr: "Kafka producer component is not registered",
+			wantErr: "no Kafka producer component is registered",
 		},
 	}
 

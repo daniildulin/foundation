@@ -27,7 +27,7 @@ func (s *Service) GetRedis() *redis.Client {
 func (s *Service) TryGetRedis() (*redis.Client, error) {
 	component := s.GetComponent(fredis.ComponentName)
 	if component == nil {
-		return nil, errors.New("Redis component is not registered: set REDIS_URL or use foundation.WithRedis()")
+		return nil, errors.New("no Redis component is registered: set REDIS_URL or use foundation.WithRedis()")
 	}
 
 	comp, ok := component.(*fredis.Component)
@@ -36,7 +36,7 @@ func (s *Service) TryGetRedis() (*redis.Client, error) {
 	}
 
 	if comp.Connection == nil {
-		return nil, errors.New("Redis component has not been started yet")
+		return nil, errors.New("the Redis component has not been started yet")
 	}
 
 	return comp.Connection, nil
