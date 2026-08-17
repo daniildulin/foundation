@@ -130,6 +130,53 @@ var (
 	})
 )
 
+// Database metrics, recorded by the pgx query tracer.
+var (
+	DatabaseQueries = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: Namespace,
+		Subsystem: "database",
+		Name:      "queries_total",
+		Help:      "Number of SQL statements executed, by operation and outcome.",
+	}, []string{"operation", "result"})
+
+	DatabaseQueryDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: Namespace,
+		Subsystem: "database",
+		Name:      "query_duration_seconds",
+		Help:      "Time spent executing a SQL statement.",
+		Buckets:   prometheus.DefBuckets,
+	}, []string{"operation"})
+)
+
+// Connection pool descriptors.
+//
+// These are read from pgxpool at scrape time rather than being pushed, so they
+// are exposed through a Collector. Pool exhaustion is a common and confusing
+// production failure: the service looks idle, every request is slow, and
+// nothing in the logs explains why.
+var (
+	DatabasePoolTotalConns = prometheus.NewDesc(
+		Namespace+"_database_pool_total_connections",
+		"Connections currently held by the pool, idle and in use.",
+		nil, nil,
+	)
+	DatabasePoolIdleConns = prometheus.NewDesc(
+		Namespace+"_database_pool_idle_connections",
+		"Connections currently idle in the pool.",
+		nil, nil,
+	)
+	DatabasePoolAcquiredConns = prometheus.NewDesc(
+		Namespace+"_database_pool_acquired_connections",
+		"Connections currently checked out of the pool.",
+		nil, nil,
+	)
+	DatabasePoolMaxConns = prometheus.NewDesc(
+		Namespace+"_database_pool_max_connections",
+		"Maximum number of connections the pool may open.",
+		nil, nil,
+	)
+)
+
 // Background jobs metrics.
 var (
 	JobsProcessed = promauto.NewCounterVec(prometheus.CounterOpts{

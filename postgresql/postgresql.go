@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -27,9 +29,12 @@ const (
 type Component struct {
 	Connection *pgxpool.Pool
 
-	databaseURL string
-	poolSize    int
-	logger      *logrus.Entry
+	databaseURL    string
+	poolSize       int
+	logger         *logrus.Entry
+	tracingEnabled bool
+
+	registerPoolStatsOnce sync.Once
 }
 
 // ComponentOption is an option to `PostgreSQLComponent`.
@@ -56,8 +61,16 @@ func WithPoolSize(poolSize int) ComponentOption {
 	}
 }
 
+// WithTracing controls whether queries emit OpenTelemetry spans and duration
+// metrics. Enabled by default.
+func WithTracing(enabled bool) ComponentOption {
+	return func(c *Component) {
+		c.tracingEnabled = enabled
+	}
+}
+
 func NewComponent(opts ...ComponentOption) *Component {
-	c := &Component{}
+	c := &Component{tracingEnabled: true}
 
 	for _, opt := range opts {
 		opt(c)
@@ -89,6 +102,10 @@ func (c *Component) Start() error {
 
 	config.MaxConns = int32(c.poolSize) //nolint:gosec // guarded above and bounded by configuration
 
+	if c.tracingEnabled {
+		config.ConnConfig.Tracer = QueryTracer{}
+	}
+
 	pool, err := pgxpool.NewWithConfig(context.Background(), config)
 	if err != nil {
 		return err
@@ -106,6 +123,14 @@ func (c *Component) Start() error {
 	}
 
 	c.Connection = pool
+
+	// Registering once per component: a second Start would otherwise fail on a
+	// duplicate collector, and there is nothing to be gained from that.
+	c.registerPoolStatsOnce.Do(func() {
+		if err := prometheus.Register(poolStatsCollector{component: c}); err != nil {
+			c.log().Warnf("Failed to register the connection pool collector: %v", err)
+		}
+	})
 
 	return nil
 }

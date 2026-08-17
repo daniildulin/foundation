@@ -55,7 +55,7 @@ func FoundationErrorToStatusStreamInterceptor(srv interface{}, stream grpc.Serve
 
 // LoggingStreamInterceptor is the streaming counterpart of
 // LoggingUnaryInterceptor.
-func LoggingStreamInterceptor(log *logrus.Entry) grpc.StreamServerInterceptor {
+func LoggingStreamInterceptor(log *logrus.Entry, _ ...LoggingOption) grpc.StreamServerInterceptor {
 	return func(srv interface{}, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		ctx := stream.Context()
 
@@ -83,7 +83,7 @@ func LoggingStreamInterceptor(log *logrus.Entry) grpc.StreamServerInterceptor {
 
 // DefaultStreamInterceptors returns the stream interceptors Foundation installs
 // on every gRPC server, in the order they run.
-func DefaultStreamInterceptors(log *logrus.Entry) []grpc.StreamServerInterceptor {
+func DefaultStreamInterceptors(log *logrus.Entry, opts ...LoggingOption) []grpc.StreamServerInterceptor {
 	return []grpc.StreamServerInterceptor{
 		RecoveryStreamInterceptor(log),
 		// Metrics sit outside the error conversion, so the status code they
@@ -91,13 +91,13 @@ func DefaultStreamInterceptors(log *logrus.Entry) []grpc.StreamServerInterceptor
 		MetricsStreamInterceptor,
 		MetadataStreamInterceptor,
 		FoundationErrorToStatusStreamInterceptor,
-		LoggingStreamInterceptor(log),
+		LoggingStreamInterceptor(log, opts...),
 	}
 }
 
 // DefaultUnaryInterceptors returns the unary interceptors Foundation installs
 // on every gRPC server, in the order they run.
-func DefaultUnaryInterceptors(log *logrus.Entry) []grpc.UnaryServerInterceptor {
+func DefaultUnaryInterceptors(log *logrus.Entry, opts ...LoggingOption) []grpc.UnaryServerInterceptor {
 	return []grpc.UnaryServerInterceptor{
 		// Recovery is outermost so that it also covers the interceptors below.
 		RecoveryUnaryInterceptor(log),
@@ -106,6 +106,6 @@ func DefaultUnaryInterceptors(log *logrus.Entry) []grpc.UnaryServerInterceptor {
 		MetricsUnaryInterceptor,
 		MetadataUnaryInterceptor,
 		FoundationErrorToStatusUnaryInterceptor,
-		LoggingUnaryInterceptor(log),
+		LoggingUnaryInterceptor(log, opts...),
 	}
 }

@@ -70,6 +70,13 @@ type Config struct {
 
 	// HealthCheckTimeout bounds a single readiness probe.
 	HealthCheckTimeout time.Duration
+
+	// LogPayloads enables logging full gRPC request and response bodies at
+	// Debug level. Off by default: a protobuf message printed whole contains
+	// whatever the caller sent, and turning on LOG_LEVEL=debug in production to
+	// investigate something unrelated should not start writing passwords and
+	// tokens to the log.
+	LogPayloads bool
 }
 
 // DatabaseConfig represents the configuration of a PostgreSQL database.
@@ -239,6 +246,7 @@ func NewConfig() *Config {
 		ShutdownTimeout:    GetEnvOrDuration("SHUTDOWN_TIMEOUT", DefaultShutdownTimeout),
 		DrainDelay:         GetEnvOrDuration("DRAIN_DELAY", 0),
 		HealthCheckTimeout: GetEnvOrDuration("HEALTH_CHECK_TIMEOUT", DefaultHealthCheckTimeout),
+		LogPayloads:        GetEnvOrBool("LOG_PAYLOADS", false),
 	}
 }
 

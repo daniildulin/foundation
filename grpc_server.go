@@ -54,12 +54,14 @@ func (s *GRPCServer) Start(opts *GRPCServerOptions) {
 }
 
 func (s *GRPCServer) ServiceFunc(ctx context.Context) error {
+	loggingOptions := []fg.LoggingOption{fg.WithPayloadLogging(s.Config.LogPayloads)}
+
 	// Default interceptors
 	//
 	// N.B.: Interceptors are executed in the order they are defined.
 	defaultOptions := []grpc.ServerOption{
-		grpc.ChainUnaryInterceptor(fg.DefaultUnaryInterceptors(s.Logger)...),
-		grpc.ChainStreamInterceptor(fg.DefaultStreamInterceptors(s.Logger)...),
+		grpc.ChainUnaryInterceptor(fg.DefaultUnaryInterceptors(s.Logger, loggingOptions...)...),
+		grpc.ChainStreamInterceptor(fg.DefaultStreamInterceptors(s.Logger, loggingOptions...)...),
 		// Continues the trace the gateway started; without a server handler the
 		// incoming traceparent was dropped and every service began a new trace.
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),

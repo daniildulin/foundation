@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -62,4 +63,53 @@ func TestNullHelpers(t *testing.T) {
 	assert.True(t, NewNullInt64(&i64).Valid)
 	assert.True(t, NewNullString(&str).Valid)
 	assert.True(t, NewNullUUID(&id).Valid)
+}
+
+// A metric labelled by SQL statement would grow a time series per distinct
+// query text; the leading verb keeps the cardinality bounded.
+func TestQueryOperation(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{"select", "SELECT * FROM chats", "SELECT"},
+		{"lowercase", "insert into chats (id) values ($1)", "INSERT"},
+		{"leading whitespace", "\n\t  UPDATE chats SET name = $1", "UPDATE"},
+		{"cte", "WITH recent AS (SELECT 1) SELECT * FROM recent", "WITH"},
+		{"transaction control", "begin", "BEGIN"},
+		// sqlc prefixes its generated statements with a name comment.
+		{"sqlc comment", "-- name: ListOutboxEvents :many\nSELECT id FROM t", "SELECT"},
+		{"several comments", "-- one\n-- two\nDELETE FROM t", "DELETE"},
+		{"only a comment", "-- name: X :exec", "unknown"},
+		{"empty", "   ", "unknown"},
+		// An unrecognised verb collapses into one series rather than being
+		// echoed back as a label value.
+		{"unknown verb", "VACUUM ANALYZE", "other"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, queryOperation(tt.sql))
+		})
+	}
+}
+
+func TestPoolStatsCollectorIsSafeBeforeStart(t *testing.T) {
+	collector := poolStatsCollector{component: NewComponent()}
+
+	descs := make(chan *prometheus.Desc, 8)
+	collector.Describe(descs)
+	close(descs)
+	assert.Len(t, descs, 4)
+
+	metrics := make(chan prometheus.Metric, 8)
+	require.NotPanics(t, func() { collector.Collect(metrics) })
+	close(metrics)
+	assert.Empty(t, metrics, "an unstarted pool has nothing to report")
+}
+
+func TestTracingIsEnabledByDefault(t *testing.T) {
+	assert.True(t, NewComponent().tracingEnabled)
+	assert.False(t, NewComponent(WithTracing(false)).tracingEnabled)
 }

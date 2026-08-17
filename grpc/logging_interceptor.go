@@ -9,9 +9,44 @@ import (
 	fctx "github.com/foundation-go/foundation/context"
 )
 
+// loggingOptions configures the logging interceptors.
+type loggingOptions struct {
+	logPayloads bool
+}
+
+// LoggingOption configures a Foundation logging interceptor.
+type LoggingOption func(*loggingOptions)
+
+// WithPayloadLogging enables logging the full request and response of every
+// call at Debug level.
+//
+// It is off by default. A protobuf message printed whole contains whatever the
+// caller sent — passwords, tokens, personal data — and `LOG_LEVEL=debug` on a
+// production service is a routine thing to do while investigating something
+// unrelated. Turn it on deliberately, in an environment where that is
+// acceptable.
+func WithPayloadLogging(enabled bool) LoggingOption {
+	return func(o *loggingOptions) {
+		o.logPayloads = enabled
+	}
+}
+
+func newLoggingOptions(opts []LoggingOption) *loggingOptions {
+	options := &loggingOptions{}
+
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	return options
+}
+
 // LoggingUnaryInterceptor returns a gRPC unary interceptor that logs all incoming gRPC calls.
-// It logs the method details, request, response, and any potential errors.
-func LoggingUnaryInterceptor(log *logrus.Entry) func(context.Context, interface{}, *grpc.UnaryServerInfo, grpc.UnaryHandler) (interface{}, error) {
+// It logs the method details and any potential errors; request and response
+// bodies are only logged when WithPayloadLogging is set.
+func LoggingUnaryInterceptor(log *logrus.Entry, opts ...LoggingOption) grpc.UnaryServerInterceptor {
+	options := newLoggingOptions(opts)
+
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
 		// Enhance the log with request-related fields.
 		//
@@ -24,7 +59,10 @@ func LoggingUnaryInterceptor(log *logrus.Entry) func(context.Context, interface{
 		})
 
 		callLog.Info("Call started")
-		callLog.WithField("request", req).Debug("Request")
+
+		if options.logPayloads {
+			callLog.WithField("request", req).Debug("Request")
+		}
 
 		// Add logger to context
 		ctx = fctx.WithLogger(ctx, callLog)
@@ -35,10 +73,14 @@ func LoggingUnaryInterceptor(log *logrus.Entry) func(context.Context, interface{
 		// Process handling error if any
 		if err != nil {
 			callLog.WithError(err).Error("Call failed")
+
 			return nil, err
 		}
 
-		callLog.WithField("response", resp).Debug("Response")
+		if options.logPayloads {
+			callLog.WithField("response", resp).Debug("Response")
+		}
+
 		callLog.Info("Call finished")
 
 		return resp, nil
