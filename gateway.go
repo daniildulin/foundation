@@ -96,12 +96,17 @@ func NewGatewayOptions() *GatewayOptions {
 // Validate reports configuration mistakes that would leave the gateway in an
 // unsafe or non-functional state.
 func (o *GatewayOptions) Validate() error {
-	if o.WithAuthentication && o.AuthenticationDetailsMiddleware == nil {
+	// With TrustInboundAuthenticationHeaders the identity headers come from the
+	// proxy in front of the gateway, so there is nothing for a details
+	// middleware to do — that deployment is exactly what the option exists for.
+	if o.WithAuthentication && o.AuthenticationDetailsMiddleware == nil && !o.TrustInboundAuthenticationHeaders {
 		return errors.New(
 			"WithAuthentication is enabled but AuthenticationDetailsMiddleware is not set: " +
 				"without it nothing populates the identity headers, and WithAuthentication " +
 				"would accept whatever the client sent. Set AuthenticationDetailsMiddleware " +
-				"(e.g. gateway.WithHydraAuthenticationDetails) or disable WithAuthentication",
+				"(e.g. gateway.WithHydraAuthenticationDetails), or set " +
+				"TrustInboundAuthenticationHeaders if a trusted proxy in front of this " +
+				"gateway already sets them, or disable WithAuthentication",
 		)
 	}
 

@@ -34,6 +34,28 @@ func TestGatewayOptionsValidate(t *testing.T) {
 	t.Run("no authentication needs no details middleware", func(t *testing.T) {
 		assert.NoError(t, NewGatewayOptions().Validate())
 	})
+
+	// A gateway behind an authenticating proxy has nothing for a details
+	// middleware to do — that deployment is what the option exists for, and
+	// refusing to start it left no supported configuration at all.
+	t.Run("a trusted proxy replaces the details middleware", func(t *testing.T) {
+		opts := NewGatewayOptions()
+		opts.WithAuthentication = true
+		opts.TrustInboundAuthenticationHeaders = true
+
+		assert.NoError(t, opts.Validate())
+	})
+
+	t.Run("the error points at every way out", func(t *testing.T) {
+		opts := NewGatewayOptions()
+		opts.WithAuthentication = true
+
+		err := opts.Validate()
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "AuthenticationDetailsMiddleware")
+		assert.Contains(t, err.Error(), "TrustInboundAuthenticationHeaders")
+	})
 }
 
 func newTestService() *Service {

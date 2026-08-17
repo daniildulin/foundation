@@ -66,10 +66,14 @@ func WithHydraAuthenticationDetails(handler http.Handler) http.Handler {
 // Foundation installs this as the first middleware in the chain. Disable it
 // only when the gateway sits behind a trusted proxy that sets these headers
 // itself, via `GatewayOptions.TrustInboundAuthenticationHeaders`.
+//
+// Both spellings are removed: the plain header and its `Grpc-Metadata-` alias,
+// which grpc-gateway would otherwise forward as the same gRPC metadata key.
 func StripClientAuthenticationHeaders(handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		for _, header := range fhttp.AuthenticationHeaders {
 			r.Header.Del(header)
+			r.Header.Del("Grpc-Metadata-" + header)
 		}
 
 		handler.ServeHTTP(w, r)

@@ -30,14 +30,30 @@ func MetadataUnaryInterceptor(ctx context.Context, req interface{}, info *grpc.U
 }
 
 // GetMetadataValue retrieves the value of a specified key from the metadata of a gRPC context.
-func GetMetadataValue(ctx context.Context, key string) (s string) {
-	if md, ok := metadata.FromIncomingContext(ctx); ok {
-		if p, ok := md[key]; ok {
-			s = strings.Join(p, ",")
-		}
+//
+// When a key carries several values only the first is returned. Joining them —
+// as this used to do, with a comma — produces a string that is not a valid
+// value of anything: a duplicated `x-user-id` became `id1,id2`, and a
+// duplicated `x-scope` became `scopeA,scopeB scopeC`, which then split on
+// whitespace into scopes that were never granted.
+func GetMetadataValue(ctx context.Context, key string) string {
+	values := GetMetadataValues(ctx, key)
+	if len(values) == 0 {
+		return ""
 	}
 
-	return
+	return values[0]
+}
+
+// GetMetadataValues retrieves every value stored under a key in the metadata of
+// a gRPC context.
+func GetMetadataValues(ctx context.Context, key string) []string {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return nil
+	}
+
+	return md[key]
 }
 
 // getCorrelationID returns the correlation ID from the specified gRPC context.
