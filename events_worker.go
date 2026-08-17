@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"sort"
-	"strings"
 	"time"
 
 	fctx "github.com/foundation-go/foundation/context"
@@ -21,7 +20,14 @@ import (
 type EventsWorker struct {
 	*SpinWorker
 
-	protoNamesToMessages map[string]proto.Message
+	registry map[string]*handlerEntry
+}
+
+// handlerEntry holds everything needed to process one event type: a template
+// message to clone before unmarshalling, and the handlers registered for it.
+type handlerEntry struct {
+	template proto.Message
+	handlers []EventHandler
 }
 
 // EventHandler represents an event handler
@@ -64,33 +70,24 @@ func (opts *EventsWorkerOptions) GetTopics() []string {
 		return opts.Topics
 	}
 
-	// Otherwise, build topics from events we're handling
-	topics := []string{}
-
 	if len(opts.Handlers) == 0 {
 		return nil
 	}
 
+	// Otherwise, build topics from the events we handle: the message name
+	// without its last segment, so project.service.SomeEvent yields
+	// project.service.
+	seen := make(map[string]bool, len(opts.Handlers))
+	topics := []string{}
+
 	for protoMsg := range opts.Handlers {
-		protoName := ProtoToName(protoMsg)
-		// Collect service names from event message names
-		// project.service.SomeEvent -> project.service
-		topic := protoName[:strings.LastIndex(protoName, ".")]
-
-		if topic != "" {
-			// Add topic to the list if it's not already there
-			found := false
-			for _, t := range topics {
-				if t == topic {
-					found = true
-					break
-				}
-			}
-
-			if !found {
-				topics = append(topics, topic)
-			}
+		topic := ProtoToTopic(protoMsg)
+		if topic == "" || seen[topic] {
+			continue
 		}
+
+		seen[topic] = true
+		topics = append(topics, topic)
 	}
 
 	// Sort topics for consistency
@@ -99,23 +96,54 @@ func (opts *EventsWorkerOptions) GetTopics() []string {
 	return topics
 }
 
-func (opts *EventsWorkerOptions) ProtoNamesToMessages() map[string]proto.Message {
-	protoNamesToMessages := make(map[string]proto.Message)
+// Registry indexes the handlers by the full proto name of the event they
+// handle, and reports registrations that cannot work.
+//
+// The Handlers map is keyed by proto.Message, i.e. by pointer identity. Two
+// separately constructed `&pb.UserCreated{}` values are different keys holding
+// the same event type, and the name-keyed lookup used at runtime silently kept
+// only one of them — so half the handlers never ran, with nothing to indicate
+// it. That is now a startup error rather than a mystery in production.
+func (opts *EventsWorkerOptions) Registry() (map[string]*handlerEntry, error) {
+	registry := make(map[string]*handlerEntry, len(opts.Handlers))
 
-	for msg := range opts.Handlers {
-		protoNamesToMessages[ProtoToName(msg)] = msg
+	for msg, handlers := range opts.Handlers {
+		name := ProtoToName(msg)
+
+		if _, duplicate := registry[name]; duplicate {
+			return nil, fmt.Errorf(
+				"event `%s` is registered under two different proto.Message keys; "+
+					"merge them into a single entry, or the handlers of one of them will never run",
+				name,
+			)
+		}
+
+		if ProtoNameToTopic(name) == "" {
+			return nil, fmt.Errorf(
+				"event `%s` has no package, so no Kafka topic can be derived from it; "+
+					"declare the message inside a proto package, or set EventsWorkerOptions.Topics explicitly",
+				name,
+			)
+		}
+
+		registry[name] = &handlerEntry{template: msg, handlers: handlers}
 	}
 
-	return protoNamesToMessages
+	return registry, nil
 }
 
 // Start runs the worker that handles events
 func (w *EventsWorker) Start(opts *EventsWorkerOptions) {
-	w.protoNamesToMessages = opts.ProtoNamesToMessages()
+	registry, err := opts.Registry()
+	if err != nil {
+		w.Fatal(err, "invalid events worker configuration")
+	}
+
+	w.registry = registry
 
 	wOpts := NewSpinWorkerOptions()
 	wOpts.ModeName = opts.ModeName
-	wOpts.ProcessFunc = w.newProcessEventFunc(opts.Handlers, opts.ErrorHandlingStrategy)
+	wOpts.ProcessFunc = w.newProcessEventFunc(opts.ErrorHandlingStrategy)
 	wOpts.StartComponentsOptions = append(opts.StartComponentsOptions,
 		WithKafkaConsumer(),
 		WithKafkaConsumerTopics(opts.GetTopics()...),
@@ -141,7 +169,6 @@ func newEventFromKafkaMessage(msg *kafka.Message) *Event {
 }
 
 func (w *EventsWorker) newProcessEventFunc(
-	handlers map[proto.Message][]EventHandler,
 	errorMode ErrorHandlingStrategy,
 ) func(ctx context.Context) ferr.FoundationError {
 	return func(ctx context.Context) ferr.FoundationError {
@@ -156,7 +183,7 @@ func (w *EventsWorker) newProcessEventFunc(
 			return ferr.NewInternalError(err, "failed to read message from Kafka")
 		}
 
-		shouldCommit, handleErr := w.handleMessage(ctx, msg, handlers, errorMode)
+		shouldCommit, handleErr := w.handleMessage(ctx, msg, errorMode)
 
 		if shouldCommit {
 			if commitErr := w.CommitMessage(ctx, msg); commitErr != nil {
@@ -176,7 +203,6 @@ func (w *EventsWorker) newProcessEventFunc(
 func (w *EventsWorker) handleMessage(
 	ctx context.Context,
 	msg kafka.Message,
-	handlers map[proto.Message][]EventHandler,
 	errorMode ErrorHandlingStrategy,
 ) (bool, ferr.FoundationError) {
 	event := newEventFromKafkaMessage(&msg)
@@ -199,7 +225,7 @@ func (w *EventsWorker) handleMessage(
 		fmetrics.EventLag.WithLabelValues(msg.Topic).Observe(time.Since(event.CreatedAt).Seconds())
 	}
 
-	templateProtoMsg, ok := w.protoNamesToMessages[event.ProtoName]
+	entry, ok := w.registry[event.ProtoName]
 	if !ok {
 		// A worker subscribes to whole topics, so most of what it reads may be
 		// of types it does not handle. Those offsets still have to be
@@ -214,7 +240,7 @@ func (w *EventsWorker) handleMessage(
 		return true, nil
 	}
 
-	protoMsg := proto.Clone(templateProtoMsg)
+	protoMsg := proto.Clone(entry.template)
 	if err := proto.Unmarshal(event.Payload, protoMsg); err != nil {
 		// The coordinates go into the error itself, not just the log fields:
 		// this error is reported once, by the caller, and whoever reads it in
@@ -258,7 +284,7 @@ func (w *EventsWorker) handleMessage(
 			Inc()
 	}()
 
-	for _, handler := range handlers[templateProtoMsg] {
+	for _, handler := range entry.handlers {
 		handlerLog := log.WithField("handler", fmt.Sprintf("%T", handler))
 		handlerLog.Info("Processing event")
 

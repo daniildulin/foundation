@@ -28,7 +28,9 @@ func (h *recordingHandler) Handle(context.Context, *Event, proto.Message) ([]*Ev
 	return nil, h.err
 }
 
-func newTestEventsWorker(handlers map[proto.Message][]EventHandler) (*EventsWorker, *bool) {
+func newTestEventsWorker(t *testing.T, handlers map[proto.Message][]EventHandler) (*EventsWorker, *bool) {
+	t.Helper()
+
 	logger := logrus.New()
 	logger.SetOutput(io.Discard)
 
@@ -45,11 +47,12 @@ func newTestEventsWorker(handlers map[proto.Message][]EventHandler) (*EventsWork
 		cancelFunc: func() { shutdownCalled = true },
 	}
 
-	opts := &EventsWorkerOptions{Handlers: handlers}
+	registry, err := (&EventsWorkerOptions{Handlers: handlers}).Registry()
+	require.NoError(t, err)
 
 	return &EventsWorker{
-		SpinWorker:           &SpinWorker{Service: svc},
-		protoNamesToMessages: opts.ProtoNamesToMessages(),
+		SpinWorker: &SpinWorker{Service: svc},
+		registry:   registry,
 	}, &shutdownCalled
 }
 
@@ -81,15 +84,13 @@ func TestHandleMessageCommitsHandledEvent(t *testing.T) {
 	handler := &recordingHandler{}
 	template := &ferrpb.NotFoundError{}
 
-	worker, shutdown := newTestEventsWorker(map[proto.Message][]EventHandler{
+	worker, shutdown := newTestEventsWorker(t, map[proto.Message][]EventHandler{
 		template: {handler},
 	})
 
 	msg := newTestMessage(t, &ferrpb.NotFoundError{Kind: "chat", Id: "1"}, nil)
 
-	shouldCommit, err := worker.handleMessage(context.Background(), msg, map[proto.Message][]EventHandler{
-		template: {handler},
-	}, IgnoreError)
+	shouldCommit, err := worker.handleMessage(context.Background(), msg, IgnoreError)
 
 	assert.True(t, shouldCommit)
 	assert.Nil(t, err)
@@ -102,13 +103,13 @@ func TestHandleMessageCommitsHandledEvent(t *testing.T) {
 // committed offset behind the read position: the lag grew without bound and
 // every restart replayed the tail of the topic.
 func TestHandleMessageCommitsEventWithoutHandlers(t *testing.T) {
-	worker, shutdown := newTestEventsWorker(map[proto.Message][]EventHandler{
+	worker, shutdown := newTestEventsWorker(t, map[proto.Message][]EventHandler{
 		&ferrpb.NotFoundError{}: {&recordingHandler{}},
 	})
 
 	msg := newTestMessage(t, &ferrpb.StaleObjectError{Kind: "chat"}, nil)
 
-	shouldCommit, err := worker.handleMessage(context.Background(), msg, nil, IgnoreError)
+	shouldCommit, err := worker.handleMessage(context.Background(), msg, IgnoreError)
 
 	assert.True(t, shouldCommit, "an unhandled event must still advance the committed offset")
 	assert.Nil(t, err)
@@ -116,13 +117,13 @@ func TestHandleMessageCommitsEventWithoutHandlers(t *testing.T) {
 }
 
 func TestHandleMessageCommitsEventWithoutProtoNameHeader(t *testing.T) {
-	worker, _ := newTestEventsWorker(map[proto.Message][]EventHandler{
+	worker, _ := newTestEventsWorker(t, map[proto.Message][]EventHandler{
 		&ferrpb.NotFoundError{}: {&recordingHandler{}},
 	})
 
 	msg := newRawTestMessage([]byte("whatever"), "", nil)
 
-	shouldCommit, err := worker.handleMessage(context.Background(), msg, nil, IgnoreError)
+	shouldCommit, err := worker.handleMessage(context.Background(), msg, IgnoreError)
 
 	assert.True(t, shouldCommit)
 	assert.Nil(t, err)
@@ -135,11 +136,11 @@ func TestHandleMessageCommitsUnparsablePayload(t *testing.T) {
 	template := &ferrpb.NotFoundError{}
 	handlers := map[proto.Message][]EventHandler{template: {handler}}
 
-	worker, shutdown := newTestEventsWorker(handlers)
+	worker, shutdown := newTestEventsWorker(t, handlers)
 
 	msg := newRawTestMessage([]byte{0xff, 0xff, 0xff, 0xff}, ProtoToName(template), nil)
 
-	shouldCommit, err := worker.handleMessage(context.Background(), msg, handlers, IgnoreError)
+	shouldCommit, err := worker.handleMessage(context.Background(), msg, IgnoreError)
 
 	assert.True(t, shouldCommit)
 	require.NotNil(t, err)
@@ -156,11 +157,11 @@ func TestHandleMessageShutsDownOnUnparsablePayloadWhenAsked(t *testing.T) {
 	template := &ferrpb.NotFoundError{}
 	handlers := map[proto.Message][]EventHandler{template: {handler}}
 
-	worker, shutdown := newTestEventsWorker(handlers)
+	worker, shutdown := newTestEventsWorker(t, handlers)
 
 	msg := newRawTestMessage([]byte{0xff, 0xff, 0xff, 0xff}, ProtoToName(template), nil)
 
-	shouldCommit, err := worker.handleMessage(context.Background(), msg, handlers, ShutdownOnError)
+	shouldCommit, err := worker.handleMessage(context.Background(), msg, ShutdownOnError)
 
 	assert.False(t, shouldCommit, "ShutdownOnError must leave the offset for investigation")
 	assert.NotNil(t, err)
@@ -172,11 +173,11 @@ func TestHandleMessageCommitsAfterHandlerErrorByDefault(t *testing.T) {
 	template := &ferrpb.NotFoundError{}
 	handlers := map[proto.Message][]EventHandler{template: {handler}}
 
-	worker, shutdown := newTestEventsWorker(handlers)
+	worker, shutdown := newTestEventsWorker(t, handlers)
 
 	msg := newTestMessage(t, &ferrpb.NotFoundError{Kind: "chat", Id: "1"}, nil)
 
-	shouldCommit, err := worker.handleMessage(context.Background(), msg, handlers, IgnoreError)
+	shouldCommit, err := worker.handleMessage(context.Background(), msg, IgnoreError)
 
 	assert.True(t, shouldCommit)
 	assert.NotNil(t, err)
@@ -189,11 +190,11 @@ func TestHandleMessageShutsDownOnHandlerError(t *testing.T) {
 	template := &ferrpb.NotFoundError{}
 	handlers := map[proto.Message][]EventHandler{template: {handler}}
 
-	worker, shutdown := newTestEventsWorker(handlers)
+	worker, shutdown := newTestEventsWorker(t, handlers)
 
 	msg := newTestMessage(t, &ferrpb.NotFoundError{Kind: "chat", Id: "1"}, nil)
 
-	shouldCommit, err := worker.handleMessage(context.Background(), msg, handlers, ShutdownOnError)
+	shouldCommit, err := worker.handleMessage(context.Background(), msg, ShutdownOnError)
 
 	assert.False(t, shouldCommit)
 	assert.NotNil(t, err)
@@ -207,11 +208,11 @@ func TestHandleMessageStopsAfterFirstFailingHandler(t *testing.T) {
 	template := &ferrpb.NotFoundError{}
 	handlers := map[proto.Message][]EventHandler{template: {failing, next}}
 
-	worker, _ := newTestEventsWorker(handlers)
+	worker, _ := newTestEventsWorker(t, handlers)
 
 	msg := newTestMessage(t, &ferrpb.NotFoundError{Kind: "chat", Id: "1"}, nil)
 
-	_, err := worker.handleMessage(context.Background(), msg, handlers, IgnoreError)
+	_, err := worker.handleMessage(context.Background(), msg, IgnoreError)
 
 	assert.NotNil(t, err)
 	assert.Equal(t, 1, failing.calls)
@@ -242,4 +243,52 @@ func TestEventsWorkerGetTopics(t *testing.T) {
 
 func TestShutdownIsSafeWithoutStart(t *testing.T) {
 	assert.NotPanics(t, func() { (&Service{}).Shutdown() })
+}
+
+// The Handlers map is keyed by pointer identity, so two separately constructed
+// values of the same message type are different keys. The name-keyed lookup
+// used at runtime silently kept only one of them, and half the handlers never
+// ran.
+func TestRegistryRejectsDuplicateEventTypes(t *testing.T) {
+	opts := &EventsWorkerOptions{
+		Handlers: map[proto.Message][]EventHandler{
+			&ferrpb.NotFoundError{}: {&recordingHandler{}},
+			// A second, distinct pointer to the same message type.
+			&ferrpb.NotFoundError{}: {&recordingHandler{}},
+		},
+	}
+
+	// Two composite-literal keys of the same type are distinct pointers, so the
+	// map really does hold two entries.
+	require.Len(t, opts.Handlers, 2)
+
+	_, err := opts.Registry()
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "two different proto.Message keys")
+	assert.Contains(t, err.Error(), "foundation.errors.NotFoundError")
+}
+
+func TestRegistryAcceptsDistinctEventTypes(t *testing.T) {
+	registry, err := (&EventsWorkerOptions{
+		Handlers: map[proto.Message][]EventHandler{
+			&ferrpb.NotFoundError{}:    {&recordingHandler{}},
+			&ferrpb.StaleObjectError{}: {&recordingHandler{}, &recordingHandler{}},
+		},
+	}).Registry()
+
+	require.NoError(t, err)
+	require.Len(t, registry, 2)
+	assert.Len(t, registry["foundation.errors.StaleObjectError"].handlers, 2)
+	assert.NotNil(t, registry["foundation.errors.NotFoundError"].template)
+}
+
+// A message with no proto package yields an empty topic. Publishing to a topic
+// named "" fails at the broker, far from the cause.
+func TestProtoNameToTopic(t *testing.T) {
+	assert.Equal(t, "project.service", ProtoNameToTopic("project.service.SomeEvent"))
+	assert.Equal(t, "service", ProtoNameToTopic("service.SomeEvent"))
+	assert.Equal(t, "", ProtoNameToTopic("SomeEvent"))
+	assert.Equal(t, "", ProtoNameToTopic(""))
+	assert.Equal(t, "", ProtoNameToTopic(".SomeEvent"))
 }

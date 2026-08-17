@@ -252,13 +252,22 @@ func (s *Service) DeleteOutboxEvents(ctx context.Context, tx pgx.Tx, ids []int64
 	return nil
 }
 
+// ProtoNameToTopic derives the Kafka topic from a fully-qualified proto message
+// name by dropping the last segment: `project.service.SomeEvent` becomes
+// `project.service`.
+//
+// A name with no package has no topic, and the empty string is returned. The
+// events worker refuses to start on such a message rather than trying to
+// publish to a topic named "".
+//
 // TODO: extract these functions to a more appropriate place
 func ProtoNameToTopic(protoName string) string {
-	// TODO: Respect `EVENTS_WORKER_ERRORS_TOPIC` for Foundation errors
-	topicParts := strings.Split(protoName, ".")
-	topicParts = topicParts[:len(topicParts)-1]
+	index := strings.LastIndex(protoName, ".")
+	if index <= 0 {
+		return ""
+	}
 
-	return strings.Join(topicParts, ".")
+	return protoName[:index]
 }
 
 func ProtoToTopic(msg proto.Message) string {
