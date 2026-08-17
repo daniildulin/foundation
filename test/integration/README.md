@@ -11,6 +11,12 @@ go test -tags=integration ./... # from this directory
 They need a running Docker daemon and take about 70 seconds; the containers are
 started once for the package and shared.
 
+Without a daemon the run **fails**, rather than skipping. A skip would make a CI
+runner with no Docker report a green integration job that tested nothing, which
+is the failure mode this repository has already been bitten by. Set
+`FOUNDATION_INTEGRATION_SKIP_WITHOUT_DOCKER=1` to opt into the soft skip
+locally.
+
 ## Why they exist
 
 A large part of the framework's behaviour is only true if the servers behave the

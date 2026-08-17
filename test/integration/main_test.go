@@ -75,9 +75,21 @@ func TestMain(m *testing.M) {
 
 	teardown, err := startContainers(ctx)
 	if err != nil {
-		// A machine without Docker should skip these tests, not fail them.
-		fmt.Fprintf(os.Stderr, "integration tests need a working Docker daemon: %v\n", err)
-		os.Exit(0)
+		// Failing is the default on purpose.
+		//
+		// Exiting 0 here would make a CI runner without a Docker daemon report
+		// a green integration job that tested nothing — the same shape of
+		// problem as a pipeline that passes because it never looks. Set
+		// FOUNDATION_INTEGRATION_SKIP_WITHOUT_DOCKER to opt into the soft skip
+		// on a laptop.
+		fmt.Fprintf(os.Stderr, "\nintegration tests need a working Docker daemon: %v\n", err)
+
+		if os.Getenv("FOUNDATION_INTEGRATION_SKIP_WITHOUT_DOCKER") != "" {
+			fmt.Fprintln(os.Stderr, "skipping, because FOUNDATION_INTEGRATION_SKIP_WITHOUT_DOCKER is set")
+			os.Exit(0)
+		}
+
+		os.Exit(1)
 	}
 
 	code := m.Run()
