@@ -151,6 +151,11 @@ func (w *EventsWorker) newProcessEventFunc(
 
 		var handleErr ferr.FoundationError
 
+		// Enrich the context with the correlation ID of the incoming event, so
+		// that everything published while handling it — including the error
+		// event below — carries the same ID.
+		ctx = fctx.WithCorrelationID(ctx, event.Headers[fkafka.HeaderCorrelationID])
+
 		log := w.Logger.WithFields(map[string]interface{}{
 			"correlation_id": event.Headers[fkafka.HeaderCorrelationID],
 			"event":          event.ProtoName,
@@ -230,9 +235,6 @@ func (w *EventsWorker) processEvent(ctx context.Context, handler EventHandler, e
 		// Add transaction to context
 		ctx = fctx.WithTX(ctx, tx)
 	}
-
-	// Add correlation ID to context
-	ctx = fctx.WithCorrelationID(ctx, event.Headers[fkafka.HeaderCorrelationID])
 
 	// Handle event
 	events, handleErr := handler.Handle(ctx, event, msg)
