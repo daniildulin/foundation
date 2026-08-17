@@ -2,6 +2,7 @@ package foundation
 
 import (
 	"context"
+	"fmt"
 
 	cablegrpc "github.com/foundation-go/foundation/cable/grpc"
 	pb "github.com/foundation-go/foundation/cable/grpc/proto"
@@ -65,9 +66,26 @@ func (s *CableGRPC) ServiceFunc(ctx context.Context) error {
 	defaultOptions := []grpc.ServerOption{
 		grpc.ChainUnaryInterceptor(
 			fg.RecoveryUnaryInterceptor(s.Logger),
+			fg.MetricsUnaryInterceptor,
 			cablegrpc.LoggingUnaryInterceptor(s.Logger),
 		),
 		grpc.ChainStreamInterceptor(fg.RecoveryStreamInterceptor(s.Logger)),
+	}
+
+	// mTLS, on the same terms as the regular gRPC mode. The cable server speaks
+	// to AnyCable across the cluster and carries user identity in both
+	// directions; it had no transport security option at all.
+	if s.Config.GRPC.TLSDir != "" {
+		s.Logger.Debugf("Cable gRPC mTLS is enabled, loading certificates from %s", s.Config.GRPC.TLSDir)
+
+		tlsConfig, err := fg.NewTLSConfig(s.Config.GRPC.TLSDir)
+		if err != nil {
+			return fmt.Errorf("failed to load TLS config: %w", err)
+		}
+
+		defaultOptions = append(defaultOptions, grpc.Creds(tlsConfig))
+	} else if IsProductionEnv() {
+		s.Logger.Warn("mTLS for the cable gRPC server is not configured; it is strongly recommended in production")
 	}
 
 	// Prepend the default server options in front of the application-defined ones

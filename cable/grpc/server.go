@@ -6,15 +6,34 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 
-	pb "github.com/foundation-go/foundation/cable/grpc/proto"
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	pb "github.com/foundation-go/foundation/cable/grpc/proto"
 )
 
 const (
 	IsAuthenticatedKey = "isAuthenticated"
 	UserIDKey          = "userID"
+)
+
+const (
+	// AccessTokenQueryParam is the query parameter the access token is read
+	// from when no header carries it.
+	//
+	// A token in a URL is a token in every access log, proxy log and browser
+	// history along the way. Prefer sending it as a header; this remains
+	// supported because browser WebSocket clients cannot set headers.
+	AccessTokenQueryParam = "accessToken"
+
+	// AuthorizationHeader and AccessTokenHeader are the headers checked, in
+	// this order, before falling back to the query parameter.
+	AuthorizationHeader = "authorization"
+	AccessTokenHeader   = "x-access-token"
 )
 
 const (
@@ -60,7 +79,14 @@ type ConnIdentifier struct {
 }
 
 func (s *Server) Connect(ctx context.Context, in *pb.ConnectionRequest) (*pb.ConnectionResponse, error) {
-	s.Logger.WithField("url", in.Env.Url).Debug("Connect received")
+	if in.GetEnv() == nil {
+		return nil, status.Error(codes.InvalidArgument, "connection request has no env")
+	}
+
+	// The URL carries the access token as a query parameter, so it is logged
+	// with that parameter removed. It used to be logged whole, which put every
+	// access token into the debug log.
+	s.Logger.WithField("url", redactAccessToken(in.Env.Url)).Debug("Connect received")
 
 	unauthenticatedResp := &pb.ConnectionResponse{
 		Status:        pb.Status_FAILURE,
@@ -75,13 +101,16 @@ func (s *Server) Connect(ctx context.Context, in *pb.ConnectionRequest) (*pb.Con
 	}
 
 	if s.WithAuthentication {
-		// Parse URL from in.Env.Url and get `accessToken` from it
-		parsedURL, err := url.Parse(in.Env.Url)
-		if err != nil {
-			return nil, err
+		if s.AuthenticationFunc == nil {
+			// Failing closed rather than dereferencing nil: a server configured
+			// to authenticate but given nothing to authenticate with must not
+			// let connections through, and must not crash either.
+			s.Logger.Error("WithAuthentication is enabled but AuthenticationFunc is not set")
+
+			return unauthenticatedResp, nil
 		}
 
-		accessToken = parsedURL.Query().Get("accessToken")
+		accessToken = accessTokenFrom(in.Env)
 		if accessToken == "" {
 			return unauthenticatedResp, nil
 		}
@@ -123,6 +152,10 @@ func (s *Server) Connect(ctx context.Context, in *pb.ConnectionRequest) (*pb.Con
 }
 
 func (s *Server) Command(ctx context.Context, in *pb.CommandMessage) (*pb.CommandResponse, error) {
+	if in.GetEnv() == nil {
+		return nil, status.Error(codes.InvalidArgument, "command has no env")
+	}
+
 	s.Logger.WithField("command", in.Command).Debug("Command received")
 
 	resp := &pb.CommandResponse{
@@ -207,6 +240,51 @@ func (s *Server) Disconnect(ctx context.Context, in *pb.DisconnectRequest) (*pb.
 	return &pb.DisconnectResponse{
 		Status: pb.Status_SUCCESS,
 	}, nil
+}
+
+// accessTokenFrom extracts the access token from a connection environment,
+// preferring a header over the query parameter.
+func accessTokenFrom(env *pb.Env) string {
+	for _, header := range []string{AuthorizationHeader, AccessTokenHeader} {
+		if value := headerValue(env.GetHeaders(), header); value != "" {
+			return strings.TrimPrefix(value, "Bearer ")
+		}
+	}
+
+	parsedURL, err := url.Parse(env.GetUrl())
+	if err != nil {
+		return ""
+	}
+
+	return parsedURL.Query().Get(AccessTokenQueryParam)
+}
+
+// headerValue looks a header up case-insensitively; AnyCable does not
+// canonicalise the map it forwards.
+func headerValue(headers map[string]string, name string) string {
+	for key, value := range headers {
+		if strings.EqualFold(key, name) {
+			return value
+		}
+	}
+
+	return ""
+}
+
+// redactAccessToken removes the access token from a URL so it can be logged.
+func redactAccessToken(rawURL string) string {
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil {
+		return "<unparsable url>"
+	}
+
+	query := parsedURL.Query()
+	if query.Has(AccessTokenQueryParam) {
+		query.Set(AccessTokenQueryParam, "[REDACTED]")
+		parsedURL.RawQuery = query.Encode()
+	}
+
+	return parsedURL.String()
 }
 
 func (s *Server) channelFromIdent(ident map[string]string) (Channel, error) {
