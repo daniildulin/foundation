@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -32,6 +33,10 @@ type Service struct {
 	ModeName   string
 	cancelFunc context.CancelFunc
 
+	// draining is set once shutdown begins, so that the readiness probe can
+	// report the service as unavailable before anything is torn down.
+	draining atomic.Bool
+
 	Logger *logrus.Entry
 }
 
@@ -52,6 +57,15 @@ type Config struct {
 	// supervisor's own grace period (Kubernetes' terminationGracePeriodSeconds,
 	// for instance), so that the service finishes on its own terms.
 	ShutdownTimeout time.Duration
+
+	// DrainDelay is how long the service keeps serving after it has started
+	// failing its readiness probe, before it begins shutting down. It gives
+	// load balancers time to notice and stop routing new requests here.
+	// Default: 0, i.e. shut down immediately.
+	DrainDelay time.Duration
+
+	// HealthCheckTimeout bounds a single readiness probe.
+	HealthCheckTimeout time.Duration
 }
 
 // DatabaseConfig represents the configuration of a PostgreSQL database.
@@ -203,7 +217,9 @@ func NewConfig() *Config {
 			Pool:      GetEnvOrInt("REDIS_POOL", 5),
 			Namespace: GetEnvOrString("REDIS_NAMESPACE", ""),
 		},
-		ShutdownTimeout: GetEnvOrDuration("SHUTDOWN_TIMEOUT", DefaultShutdownTimeout),
+		ShutdownTimeout:    GetEnvOrDuration("SHUTDOWN_TIMEOUT", DefaultShutdownTimeout),
+		DrainDelay:         GetEnvOrDuration("DRAIN_DELAY", 0),
+		HealthCheckTimeout: GetEnvOrDuration("HEALTH_CHECK_TIMEOUT", DefaultHealthCheckTimeout),
 	}
 }
 
@@ -339,6 +355,8 @@ func (s *Service) addSystemComponents() error {
 	if s.Config.Metrics.Enabled {
 		s.Components = append(s.Components, NewMetricsServerComponent(
 			WithMetricsServerHealthHandler(s.healthHandler),
+			WithMetricsServerLivenessHandler(s.livenessHandler),
+			WithMetricsServerReadinessHandler(s.readinessHandler),
 			WithMetricsServerLogger(s.Logger),
 			WithMetricsServerPort(s.Config.Metrics.Port),
 		))
@@ -494,17 +512,37 @@ func (s *Service) Start(opts *StartOptions) {
 		s.Fatal(err, "failed to start components")
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	signalCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	s.cancelFunc = stop
 
+	// The service context lags the signal by the drain delay. Readiness starts
+	// failing the moment the signal arrives, but servers keep accepting for a
+	// little longer, so that load balancers notice before connections are
+	// refused rather than after.
+	serviceCtx, stopServing := context.WithCancel(context.WithoutCancel(signalCtx))
+	defer stopServing()
+
+	go func() {
+		<-signalCtx.Done()
+
+		s.draining.Store(true)
+
+		if delay := s.drainDelay(); delay > 0 {
+			s.Logger.Infof("Draining for %s before shutting down", delay)
+			time.Sleep(delay)
+		}
+
+		stopServing()
+	}()
+
 	// Run the actual service code
-	if err := opts.ServiceFunc(ctx); err != nil {
+	if err := opts.ServiceFunc(serviceCtx); err != nil {
 		s.Fatal(err, "failed to start service")
 	}
 
-	<-ctx.Done()
+	<-serviceCtx.Done()
 	s.Logger.Println("Shutting down service...")
 
 	s.StopComponents()

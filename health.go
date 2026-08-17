@@ -1,27 +1,115 @@
 package foundation
 
 import (
-	"fmt"
+	"context"
+	"encoding/json"
 	"net/http"
 	"time"
-
-	"github.com/getsentry/sentry-go"
 )
 
-func (s *Service) healthHandler(w http.ResponseWriter, r *http.Request) {
+// DefaultHealthCheckTimeout bounds how long the readiness probe spends checking
+// components before answering.
+const DefaultHealthCheckTimeout = 2 * time.Second
+
+// healthStatus is the JSON body returned by the health endpoints.
+type healthStatus struct {
+	Status string `json:"status"`
+	// Components maps a component name to the reason it is unhealthy. Only
+	// unhealthy components appear.
+	Components map[string]string `json:"components,omitempty"`
+}
+
+// livenessHandler reports whether the process is running.
+//
+// It deliberately checks nothing else. Kubernetes restarts a pod whose liveness
+// probe fails, and restarting a service because its database blipped turns a
+// dependency outage into an outage of everything that depends on the service
+// too. Dependencies belong in the readiness probe.
+func (s *Service) livenessHandler(w http.ResponseWriter, _ *http.Request) {
+	writeHealthStatus(w, http.StatusOK, healthStatus{Status: "ok"})
+}
+
+// readinessHandler reports whether the service can serve traffic right now:
+// it is not shutting down, and every component reports itself healthy.
+func (s *Service) readinessHandler(w http.ResponseWriter, r *http.Request) {
+	if s.IsDraining() {
+		writeHealthStatus(w, http.StatusServiceUnavailable, healthStatus{Status: "draining"})
+
+		return
+	}
+
+	// One budget for the whole probe, so a slow component cannot make the
+	// handler outlive the probe timeout on the other side.
+	ctx, cancel := context.WithTimeout(r.Context(), s.healthCheckTimeout())
+	defer cancel()
+
+	status := healthStatus{Status: "ok"}
+
 	for _, component := range s.Components {
 		started := time.Now()
 
-		if err := component.Health(); err != nil {
-			err = fmt.Errorf("health check failed for `%s`: %w", component.Name(), err)
-			sentry.CaptureException(err)
-			s.Logger.Error(err)
-			w.WriteHeader(http.StatusInternalServerError)
-			return
+		if err := checkComponentHealth(ctx, component); err != nil {
+			if status.Components == nil {
+				status.Components = make(map[string]string)
+			}
+
+			status.Components[component.Name()] = err.Error()
+			status.Status = "unavailable"
+
+			// Probes run every few seconds. Reporting each failure to Sentry
+			// would bury the project in duplicates for the length of any
+			// outage, so this only logs; the readiness metric is the signal.
+			s.Logger.Warnf("Health check failed for `%s`: %v", component.Name(), err)
+
+			continue
 		}
 
 		s.Logger.Debugf("Health check for `%s` took %dms", component.Name(), time.Since(started).Milliseconds())
 	}
 
-	w.WriteHeader(http.StatusOK)
+	if status.Status != "ok" {
+		writeHealthStatus(w, http.StatusServiceUnavailable, status)
+
+		return
+	}
+
+	writeHealthStatus(w, http.StatusOK, status)
+}
+
+// healthHandler serves the historical `/health` endpoint, which has readiness
+// semantics. Point liveness probes at `/live` and readiness probes at `/ready`.
+func (s *Service) healthHandler(w http.ResponseWriter, r *http.Request) {
+	s.readinessHandler(w, r)
+}
+
+// IsDraining reports whether the service has started shutting down and should
+// no longer be sent new work.
+func (s *Service) IsDraining() bool {
+	return s.draining.Load()
+}
+
+// healthCheckTimeout returns the budget for a single readiness probe.
+func (s *Service) healthCheckTimeout() time.Duration {
+	if s.Config != nil && s.Config.HealthCheckTimeout > 0 {
+		return s.Config.HealthCheckTimeout
+	}
+
+	return DefaultHealthCheckTimeout
+}
+
+// drainDelay returns how long the service keeps serving after failing readiness
+// but before it starts shutting anything down.
+func (s *Service) drainDelay() time.Duration {
+	if s.Config != nil && s.Config.DrainDelay > 0 {
+		return s.Config.DrainDelay
+	}
+
+	return 0
+}
+
+func writeHealthStatus(w http.ResponseWriter, code int, status healthStatus) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+
+	_ = json.NewEncoder(w).Encode(status)
 }
