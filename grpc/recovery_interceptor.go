@@ -10,6 +10,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	fmetrics "github.com/foundation-go/foundation/metrics"
 )
 
 // RecoveryUnaryInterceptor turns a panic in a handler into an `Internal` status,
@@ -58,6 +60,7 @@ func handlePanic(log *logrus.Entry, method string, recovered interface{}) error 
 		WithError(err).
 		Error("Recovered from a panic in a gRPC handler")
 
+	fmetrics.Panics.WithLabelValues("grpc").Inc()
 	sentry.CaptureException(err)
 
 	return status.Error(codes.Internal, "internal error")

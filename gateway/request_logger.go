@@ -43,6 +43,23 @@ func (lrw *LoggingResponseWriter) WriteHeader(code int) {
 	lrw.ResponseWriter.WriteHeader(code)
 }
 
+// Status returns the status code written to the response, defaulting to 200 for
+// a handler that never called WriteHeader.
+func (lrw *LoggingResponseWriter) Status() int {
+	return lrw.statusCode
+}
+
+// wrapResponseWriter returns lrw, preserving the underlying writer's Flusher
+// support when it has any. Advertising Flusher unconditionally would lie to
+// handlers that check for it.
+func wrapResponseWriter(lrw *LoggingResponseWriter, original http.ResponseWriter) http.ResponseWriter {
+	if flusher, ok := original.(http.Flusher); ok {
+		return &loggingFlushingResponseWriter{LoggingResponseWriter: lrw, flusher: flusher}
+	}
+
+	return lrw
+}
+
 func WithRequestLogger(l *log.Entry) func(http.Handler) http.Handler {
 	return func(handler http.Handler) http.Handler {
 		return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -78,14 +95,10 @@ func WithRequestLogger(l *log.Entry) func(http.Handler) http.Handler {
 
 			// Wrap the response writer with our logging response writer
 			lrw := NewLoggingResponseWriter(writer)
-			var w http.ResponseWriter = lrw
-			if f, ok := writer.(http.Flusher); ok {
-				w = &loggingFlushingResponseWriter{LoggingResponseWriter: lrw, flusher: f}
-			}
 
 			// Serve the request with the wrapped response writer
 			reqLogger.Infoln("Request started")
-			handler.ServeHTTP(w, request)
+			handler.ServeHTTP(wrapResponseWriter(lrw, writer), request)
 
 			// Calculate the duration of the request
 			duration := time.Since(started)

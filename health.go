@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"time"
+
+	fmetrics "github.com/foundation-go/foundation/metrics"
 )
 
 // DefaultHealthCheckTimeout bounds how long the readiness probe spends checking
@@ -48,7 +50,10 @@ func (s *Service) readinessHandler(w http.ResponseWriter, r *http.Request) {
 	for _, component := range s.Components {
 		started := time.Now()
 
-		if err := checkComponentHealth(ctx, component); err != nil {
+		err := checkComponentHealth(ctx, component)
+		fmetrics.SetComponentUp(component.Name(), err == nil)
+
+		if err != nil {
 			if status.Components == nil {
 				status.Components = make(map[string]string)
 			}

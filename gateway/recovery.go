@@ -8,6 +8,7 @@ import (
 	"github.com/getsentry/sentry-go"
 
 	fctx "github.com/foundation-go/foundation/context"
+	fmetrics "github.com/foundation-go/foundation/metrics"
 )
 
 // internalErrorBody mirrors the shape grpc-gateway uses for error responses, so
@@ -42,6 +43,7 @@ func WithRecovery(next http.Handler) http.Handler {
 				WithError(err).
 				Error("Recovered from a panic while handling the request")
 
+			fmetrics.Panics.WithLabelValues("http").Inc()
 			sentry.CaptureException(err)
 
 			writeInternalError(w)

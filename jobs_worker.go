@@ -3,10 +3,12 @@ package foundation
 import (
 	"context"
 	"fmt"
-
-	"github.com/foundation-go/foundation/jobs"
+	"time"
 
 	"github.com/gocraft/work"
+
+	"github.com/foundation-go/foundation/jobs"
+	fmetrics "github.com/foundation-go/foundation/metrics"
 )
 
 const (
@@ -108,15 +110,27 @@ func (w *JobsWorker) ServiceFunc(ctx context.Context) error {
 	return nil
 }
 
+// LoggingMiddleware logs and measures every job run.
 func (w *JobsWorker) LoggingMiddleware(job *work.Job, next work.NextMiddlewareFunc) error {
 	w.Logger.Infof("Starting job %s", job.Name)
 
+	started := time.Now()
 	err := next()
+	elapsed := time.Since(started)
+
+	fmetrics.JobsProcessed.WithLabelValues(job.Name, fmetrics.ResultOf(err)).Inc()
+	fmetrics.JobDuration.WithLabelValues(job.Name).Observe(elapsed.Seconds())
+
 	if err != nil {
-		w.Logger.Errorf("Job %s failed: %v", job.Name, err)
-	} else {
-		w.Logger.Infof("Job %s completed", job.Name)
+		// Jobs failing was previously visible only in the log; gocraft/work
+		// retries them silently, so a job that always fails looked like
+		// nothing at all.
+		w.CaptureError(err, fmt.Sprintf("job %s failed", job.Name))
+
+		return err
 	}
 
-	return err
+	w.Logger.Infof("Job %s completed in %s", job.Name, elapsed)
+
+	return nil
 }

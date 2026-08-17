@@ -12,6 +12,7 @@ import (
 	fctx "github.com/foundation-go/foundation/context"
 	ferr "github.com/foundation-go/foundation/errors"
 	fkafka "github.com/foundation-go/foundation/kafka"
+	fmetrics "github.com/foundation-go/foundation/metrics"
 	"github.com/jackc/pgx/v5"
 	"github.com/segmentio/kafka-go"
 	"google.golang.org/protobuf/proto"
@@ -194,6 +195,10 @@ func (w *EventsWorker) handleMessage(
 	})
 	log.Info("Received event")
 
+	if !event.CreatedAt.IsZero() {
+		fmetrics.EventLag.WithLabelValues(msg.Topic).Observe(time.Since(event.CreatedAt).Seconds())
+	}
+
 	templateProtoMsg, ok := w.protoNamesToMessages[event.ProtoName]
 	if !ok {
 		// A worker subscribes to whole topics, so most of what it reads may be
@@ -202,6 +207,9 @@ func (w *EventsWorker) handleMessage(
 		// the read position, so the consumer lag grows without bound and every
 		// restart replays the tail of the topic.
 		log.Debugf("Skipping event without handlers: `%s`", event.ProtoName)
+		fmetrics.EventsProcessed.
+			WithLabelValues(msg.Topic, event.ProtoName, fmetrics.ResultSkipped).
+			Inc()
 
 		return true, nil
 	}
@@ -223,6 +231,10 @@ func (w *EventsWorker) handleMessage(
 			return false, unmarshalErr
 		}
 
+		fmetrics.EventsProcessed.
+			WithLabelValues(msg.Topic, event.ProtoName, fmetrics.ResultError).
+			Inc()
+
 		// A payload that cannot be parsed now will not become parsable later,
 		// so commit and move on rather than blocking the partition forever.
 		// The error is returned rather than reported here: the worker loop
@@ -233,6 +245,18 @@ func (w *EventsWorker) handleMessage(
 	}
 
 	var handleErr ferr.FoundationError
+
+	started := time.Now()
+
+	defer func() {
+		fmetrics.EventProcessingDuration.
+			WithLabelValues(event.ProtoName).
+			Observe(time.Since(started).Seconds())
+
+		fmetrics.EventsProcessed.
+			WithLabelValues(msg.Topic, event.ProtoName, fmetrics.ResultOf(handleErr)).
+			Inc()
+	}()
 
 	for _, handler := range handlers[templateProtoMsg] {
 		handlerLog := log.WithField("handler", fmt.Sprintf("%T", handler))

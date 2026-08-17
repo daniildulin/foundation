@@ -174,16 +174,21 @@ func TestRecoveryToleratesANilLogger(t *testing.T) {
 // run after it.
 func TestDefaultInterceptorOrder(t *testing.T) {
 	unary := DefaultUnaryInterceptors(discardLogger())
-	require.Len(t, unary, 4)
+	require.NotEmpty(t, unary)
 
 	// The outermost interceptor must swallow a panic raised deeper in the chain.
-	chained := unary[0]
-
-	_, err := chained(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/svc/M"},
+	_, err := unary[0](context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/svc/M"},
 		func(context.Context, interface{}) (interface{}, error) { panic("boom") })
 
 	st, _ := status.FromError(err)
 	assert.Equal(t, codes.Internal, st.Code())
 
-	assert.Len(t, DefaultStreamInterceptors(discardLogger()), 4)
+	streams := DefaultStreamInterceptors(discardLogger())
+	require.NotEmpty(t, streams)
+
+	err = streams[0](nil, &fakeServerStream{ctx: context.Background()}, &grpc.StreamServerInfo{FullMethod: "/svc/S"},
+		func(interface{}, grpc.ServerStream) error { panic("boom") })
+
+	st, _ = status.FromError(err)
+	assert.Equal(t, codes.Internal, st.Code())
 }

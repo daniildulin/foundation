@@ -8,6 +8,7 @@ import (
 	fctx "github.com/foundation-go/foundation/context"
 	ferr "github.com/foundation-go/foundation/errors"
 	fkafka "github.com/foundation-go/foundation/kafka"
+	fmetrics "github.com/foundation-go/foundation/metrics"
 )
 
 const (
@@ -77,6 +78,8 @@ func (o *OutboxCourier) newProcessFunc(batchSize int32) func(ctx context.Context
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), o.shutdownTimeout())
 		defer cancel()
 
+		started := time.Now()
+
 		pool := o.GetPostgreSQL()
 		tx, err := pool.Begin(ctx)
 		if err != nil {
@@ -92,7 +95,16 @@ func (o *OutboxCourier) newProcessFunc(batchSize int32) func(ctx context.Context
 
 		if len(outboxEvents) == 0 {
 			o.Logger.Debug("no outbox events to publish")
+			fmetrics.OutboxPendingEvents.Set(0)
+			fmetrics.OutboxOldestEventAge.Set(0)
+
 			return nil
+		}
+
+		// The age of the oldest event is what tells a courier that is merely
+		// busy apart from one that has stopped making progress.
+		if oldest := outboxEvents[0].CreatedAt; oldest.Valid {
+			fmetrics.OutboxOldestEventAge.Set(time.Since(oldest.Time).Seconds())
 		}
 
 		maxId := outboxEvents[len(outboxEvents)-1].ID
@@ -123,6 +135,17 @@ func (o *OutboxCourier) newProcessFunc(batchSize int32) func(ctx context.Context
 		err = tx.Commit(ctx)
 		if err != nil {
 			return ferr.NewInternalError(err, "failed to commit transaction")
+		}
+
+		fmetrics.OutboxPublishedEvents.Add(float64(len(outboxEvents)))
+		fmetrics.OutboxBatchDuration.Observe(time.Since(started).Seconds())
+
+		// A full batch means there is probably more waiting; a partial one
+		// means the outbox has been drained.
+		if int32(len(outboxEvents)) < batchSize {
+			fmetrics.OutboxPendingEvents.Set(0)
+		} else {
+			fmetrics.OutboxPendingEvents.Set(float64(len(outboxEvents)))
 		}
 
 		o.Logger.Debugf("%d outbox events have published successfully", len(outboxEvents))

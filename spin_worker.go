@@ -7,6 +7,7 @@ import (
 	"time"
 
 	ferr "github.com/foundation-go/foundation/errors"
+	fmetrics "github.com/foundation-go/foundation/metrics"
 )
 
 const SpinWorkerDefaultInterval = 5 * time.Millisecond
@@ -122,6 +123,7 @@ func (sw *SpinWorker) drain(done <-chan struct{}) {
 func (sw *SpinWorker) runIteration(ctx context.Context) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
+			fmetrics.Panics.WithLabelValues("worker").Inc()
 			sw.CaptureError(
 				fmt.Errorf("panic in worker iteration: %v\n%s", recovered, debug.Stack()),
 				"",

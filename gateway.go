@@ -146,6 +146,9 @@ func (s *Gateway) ServiceFunc(ctx context.Context) error {
 		gwruntime.WithIncomingHeaderMatcher(gateway.IncomingHeaderMatcher),
 		gwruntime.WithOutgoingHeaderMatcher(gateway.OutgoingHeaderMatcher),
 		gwruntime.WithMarshalerOption(gwruntime.MIMEWildcard, marshaler),
+		// Lets the metrics middleware label by matched route instead of by
+		// request path, which would be unbounded cardinality.
+		gwruntime.WithMetadata(gateway.RouteAnnotator),
 	}
 	muxOpts = append(muxOpts, s.Options.MuxOpts...)
 
@@ -201,6 +204,7 @@ func (s *Service) applyMiddleware(mux http.Handler, opts *GatewayOptions) http.H
 	// Recovery sits just inside the request logger, so a panic report carries
 	// the request's fields, and outside everything else.
 	middleware = append(middleware,
+		gateway.WithMetrics,
 		gateway.WithRequestLogger(s.Logger),
 		gateway.WithRecovery,
 		gateway.WithCORSEnabled(opts.CORSOptions),

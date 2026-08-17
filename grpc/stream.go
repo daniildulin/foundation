@@ -86,6 +86,9 @@ func LoggingStreamInterceptor(log *logrus.Entry) grpc.StreamServerInterceptor {
 func DefaultStreamInterceptors(log *logrus.Entry) []grpc.StreamServerInterceptor {
 	return []grpc.StreamServerInterceptor{
 		RecoveryStreamInterceptor(log),
+		// Metrics sit outside the error conversion, so the status code they
+		// record is the one the caller actually receives.
+		MetricsStreamInterceptor,
 		MetadataStreamInterceptor,
 		FoundationErrorToStatusStreamInterceptor,
 		LoggingStreamInterceptor(log),
@@ -98,6 +101,9 @@ func DefaultUnaryInterceptors(log *logrus.Entry) []grpc.UnaryServerInterceptor {
 	return []grpc.UnaryServerInterceptor{
 		// Recovery is outermost so that it also covers the interceptors below.
 		RecoveryUnaryInterceptor(log),
+		// Metrics sit outside the error conversion, so the status code they
+		// record is the one the caller actually receives.
+		MetricsUnaryInterceptor,
 		MetadataUnaryInterceptor,
 		FoundationErrorToStatusUnaryInterceptor,
 		LoggingUnaryInterceptor(log),

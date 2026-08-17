@@ -12,6 +12,7 @@ import (
 
 	fjobs "github.com/foundation-go/foundation/jobs"
 	fkafka "github.com/foundation-go/foundation/kafka"
+	fmetrics "github.com/foundation-go/foundation/metrics"
 	fpg "github.com/foundation-go/foundation/postgresql"
 	fredis "github.com/foundation-go/foundation/redis"
 	fsentry "github.com/foundation-go/foundation/sentry"
@@ -549,6 +550,8 @@ func (s *Service) Start(opts *StartOptions) {
 	// Log application startup
 	s.logStartup()
 
+	fmetrics.Info.WithLabelValues(s.Name, s.ModeName, string(FoundationEnv()), Version).Set(1)
+
 	// Start common components
 	if err := s.StartComponents(opts.StartComponentsOptions...); err != nil {
 		s.Fatal(err, "failed to start components")
@@ -570,6 +573,7 @@ func (s *Service) Start(opts *StartOptions) {
 		<-signalCtx.Done()
 
 		s.draining.Store(true)
+		fmetrics.SetDraining(true)
 
 		if delay := s.drainDelay(); delay > 0 {
 			s.Logger.Infof("Draining for %s before shutting down", delay)
