@@ -87,6 +87,28 @@ func GetEnvOrDuration(key string, defaultValue time.Duration) time.Duration {
 	return value
 }
 
+// GetEnvOrDurationSeconds parses the environment variable named by the key
+// argument as a time.Duration, accepting a bare number as a count of seconds.
+//
+// The bare-number form exists for backwards compatibility with settings that
+// were documented in seconds; prefer a unit suffix (`500ms`, `2s`).
+func GetEnvOrDurationSeconds(key string, defaultValue time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return defaultValue
+	}
+
+	if value, err := time.ParseDuration(raw); err == nil {
+		return value
+	}
+
+	if seconds, err := strconv.Atoi(raw); err == nil {
+		return time.Duration(seconds) * time.Second
+	}
+
+	return defaultValue
+}
+
 // GetEnvOrStrings returns the value of the environment variable named by the
 // key argument split on sep, or defaultValue if there is no such variable set
 // or it is empty.

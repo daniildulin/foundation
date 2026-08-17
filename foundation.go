@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os/signal"
-	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -112,13 +111,25 @@ type KafkaSASLConfig struct {
 type KafkaConsumerConfig struct {
 	Enabled bool
 	Topics  []string
+	// GroupID is the Kafka consumer group to join. Defaults to
+	// "<service name>-foundation", which is wrong as soon as an application
+	// runs two workers that read different topics: they end up in one group
+	// and take partitions away from each other on every rebalance.
+	GroupID string
 }
 
 // KafkaProducerConfig represents the configuration of a Kafka producer.
 type KafkaProducerConfig struct {
-	Enabled      bool
-	BatchSize    int
-	BatchTimeout int
+	Enabled   bool
+	BatchSize int
+	// BatchTimeout is how long the writer waits for a batch to fill before
+	// sending it. Accepts a duration (`50ms`); a bare number is read as
+	// seconds, as it was before.
+	BatchTimeout time.Duration
+	// AllowAutoTopicCreation lets a write to an unknown topic create it.
+	// Defaults to true outside production, where a typo in a topic name should
+	// fail rather than quietly create a topic.
+	AllowAutoTopicCreation bool
 }
 
 // MetricsConfig represents the configuration of a metrics server.
@@ -176,7 +187,7 @@ func NewConfig() *Config {
 			TLSDir: GetEnvOrString("GRPC_TLS_DIR", ""),
 		},
 		Kafka: &KafkaConfig{
-			Brokers: strings.Split(GetEnvOrString("KAFKA_BROKERS", ""), ","),
+			Brokers: GetEnvOrStrings("KAFKA_BROKERS", ",", nil),
 			SASL: &KafkaSASLConfig{
 				Username: GetEnvOrString("KAFKA_SASL_USERNAME", ""),
 				Password: GetEnvOrString("KAFKA_SASL_PASSWORD", ""),
@@ -185,11 +196,13 @@ func NewConfig() *Config {
 			Consumer: &KafkaConsumerConfig{
 				Enabled: false,
 				Topics:  nil,
+				GroupID: GetEnvOrString("KAFKA_CONSUMER_GROUP", ""),
 			},
 			Producer: &KafkaProducerConfig{
-				Enabled:      false,
-				BatchSize:    GetEnvOrInt("KAFKA_PRODUCER_BATCH_SIZE", 1),
-				BatchTimeout: GetEnvOrInt("KAFKA_PRODUCER_BATCH_TIMEOUT", 1),
+				Enabled:                false,
+				BatchSize:              GetEnvOrInt("KAFKA_PRODUCER_BATCH_SIZE", 1),
+				BatchTimeout:           GetEnvOrDurationSeconds("KAFKA_PRODUCER_BATCH_TIMEOUT", time.Second),
+				AllowAutoTopicCreation: GetEnvOrBool("KAFKA_ALLOW_AUTO_TOPIC_CREATION", !IsProductionEnv()),
 			},
 			TLSDir: GetEnvOrString("KAFKA_TLS_DIR", ""),
 		},
@@ -287,6 +300,20 @@ func WithJobsEnqueuer() StartComponentsOption {
 	}
 }
 
+// warnAboutPlaintextSASL points out that SASL credentials are about to travel
+// in the clear. SASL/PLAIN over a plaintext connection sends the password
+// verbatim.
+func (s *Service) warnAboutPlaintextSASL() {
+	if s.Config.Kafka.TLSDir != "" {
+		return
+	}
+
+	s.Logger.Warn(
+		"Kafka SASL is configured without TLS (KAFKA_TLS_DIR is empty): credentials will be " +
+			"sent over an unencrypted connection",
+	)
+}
+
 func (s *Service) addSystemComponents() error {
 	// Remove user-defined components in order to add system components first.
 	existedComponents := s.Components
@@ -313,42 +340,52 @@ func (s *Service) addSystemComponents() error {
 
 	// Kafka consumer
 	if s.Config.Kafka.Consumer.Enabled {
-		consumerComponents := make([]fkafka.ConsumerComponentOption, 5, 6)
-		consumerComponents[0] = fkafka.WithConsumerAppName(s.Name)
-		consumerComponents[1] = fkafka.WithConsumerBrokers(s.Config.Kafka.Brokers)
-		consumerComponents[2] = fkafka.WithConsumerLogger(s.Logger)
-		consumerComponents[3] = fkafka.WithConsumerTLSDir(s.Config.Kafka.TLSDir)
-		consumerComponents[4] = fkafka.WithConsumerTopics(s.Config.Kafka.Consumer.Topics)
+		consumerOptions := []fkafka.ConsumerComponentOption{
+			fkafka.WithConsumerAppName(s.Name),
+			fkafka.WithConsumerBrokers(s.Config.Kafka.Brokers),
+			fkafka.WithConsumerLogger(s.Logger),
+			fkafka.WithConsumerTLSDir(s.Config.Kafka.TLSDir),
+			fkafka.WithConsumerTopics(s.Config.Kafka.Consumer.Topics),
+			fkafka.WithConsumerGroupID(s.Config.Kafka.Consumer.GroupID),
+		}
 
 		if s.Config.Kafka.SASL.Username != "" && s.Config.Kafka.SASL.Password != "" {
+			s.warnAboutPlaintextSASL()
+
 			saslComponent, err := fkafka.WithSASLMechanism(s.Config.Kafka.SASL.Protocol, s.Config.Kafka.SASL.Username, s.Config.Kafka.SASL.Password)
 			if err != nil {
 				return err
 			}
-			consumerComponents = append(consumerComponents, saslComponent)
+
+			consumerOptions = append(consumerOptions, saslComponent)
 		}
 
-		s.Components = append(s.Components, fkafka.NewConsumerComponent(consumerComponents...))
+		s.Components = append(s.Components, fkafka.NewConsumerComponent(consumerOptions...))
 	}
 
 	// Kafka producer
 	if s.Config.Kafka.Producer.Enabled {
-		producerComponents := make([]fkafka.ProducerComponentOption, 5, 6)
-		producerComponents[0] = fkafka.WithProducerBrokers(s.Config.Kafka.Brokers)
-		producerComponents[1] = fkafka.WithProducerLogger(s.Logger)
-		producerComponents[2] = fkafka.WithProducerTLSDir(s.Config.Kafka.TLSDir)
-		producerComponents[3] = fkafka.WithProducerBatchSize(s.Config.Kafka.Producer.BatchSize)
-		producerComponents[4] = fkafka.WithProducerBatchTimeout(time.Duration(s.Config.Kafka.Producer.BatchTimeout) * time.Second)
+		producerOptions := []fkafka.ProducerComponentOption{
+			fkafka.WithProducerBrokers(s.Config.Kafka.Brokers),
+			fkafka.WithProducerLogger(s.Logger),
+			fkafka.WithProducerTLSDir(s.Config.Kafka.TLSDir),
+			fkafka.WithProducerBatchSize(s.Config.Kafka.Producer.BatchSize),
+			fkafka.WithProducerBatchTimeout(s.Config.Kafka.Producer.BatchTimeout),
+			fkafka.WithProducerAllowAutoTopicCreation(s.Config.Kafka.Producer.AllowAutoTopicCreation),
+		}
 
 		if s.Config.Kafka.SASL.Username != "" && s.Config.Kafka.SASL.Password != "" {
+			s.warnAboutPlaintextSASL()
+
 			producerSASLComponent, err := fkafka.WithProducerSASLMechanism(s.Config.Kafka.SASL.Protocol, s.Config.Kafka.SASL.Username, s.Config.Kafka.SASL.Password)
 			if err != nil {
 				return err
 			}
-			producerComponents = append(producerComponents, producerSASLComponent)
+
+			producerOptions = append(producerOptions, producerSASLComponent)
 		}
 
-		s.Components = append(s.Components, fkafka.NewProducerComponent(producerComponents...))
+		s.Components = append(s.Components, fkafka.NewProducerComponent(producerOptions...))
 	}
 
 	// Metrics server

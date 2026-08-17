@@ -3,7 +3,9 @@ package postgresql
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -14,6 +16,12 @@ import (
 
 const (
 	ComponentName = "postgresql"
+
+	// DefaultConnectTimeout bounds the connectivity check performed at startup.
+	DefaultConnectTimeout = 10 * time.Second
+
+	// DefaultHealthTimeout bounds a health check made without a context.
+	DefaultHealthTimeout = 2 * time.Second
 )
 
 type Component struct {
@@ -58,6 +66,16 @@ func NewComponent(opts ...ComponentOption) *Component {
 	return c
 }
 
+// log returns the component logger, or a usable default when the component was
+// built without one.
+func (c *Component) log() *logrus.Entry {
+	if c.logger == nil {
+		return logrus.NewEntry(logrus.StandardLogger()).WithField("component", c.Name())
+	}
+
+	return c.logger
+}
+
 // Start implements the Component interface.
 func (c *Component) Start() error {
 	config, err := pgxpool.ParseConfig(c.databaseURL)
@@ -65,15 +83,26 @@ func (c *Component) Start() error {
 		return err
 	}
 
-	config.MaxConns = int32(c.poolSize)
+	if c.poolSize <= 0 {
+		return fmt.Errorf("pool size must be positive, got %d", c.poolSize)
+	}
+
+	config.MaxConns = int32(c.poolSize) //nolint:gosec // guarded above and bounded by configuration
 
 	pool, err := pgxpool.NewWithConfig(context.Background(), config)
 	if err != nil {
 		return err
 	}
 
-	if err = pool.Ping(context.Background()); err != nil {
-		return err
+	// Bound the connectivity check: an unreachable database would otherwise
+	// hang startup indefinitely, with no log line explaining why.
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultConnectTimeout)
+	defer cancel()
+
+	if err = pool.Ping(ctx); err != nil {
+		pool.Close()
+
+		return fmt.Errorf("failed to reach the database within %s: %w", DefaultConnectTimeout, err)
 	}
 
 	c.Connection = pool
@@ -83,7 +112,11 @@ func (c *Component) Start() error {
 
 // Stop implements the Component interface.
 func (c *Component) Stop() error {
-	c.logger.Info("Disconnecting from PostgreSQL...")
+	if c.Connection == nil {
+		return nil
+	}
+
+	c.log().Info("Disconnecting from PostgreSQL...")
 
 	c.Connection.Close()
 
@@ -92,11 +125,19 @@ func (c *Component) Stop() error {
 
 // Health implements the Component interface.
 func (c *Component) Health() error {
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultHealthTimeout)
+	defer cancel()
+
+	return c.HealthContext(ctx)
+}
+
+// HealthContext implements the HealthCheckerContext interface.
+func (c *Component) HealthContext(ctx context.Context) error {
 	if c.Connection == nil {
-		return fmt.Errorf("connection is not initialized")
+		return errors.New("connection is not initialized")
 	}
 
-	return c.Connection.Ping(context.Background())
+	return c.Connection.Ping(ctx)
 }
 
 // Name implements the Component interface.
