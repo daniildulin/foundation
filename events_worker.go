@@ -208,21 +208,27 @@ func (w *EventsWorker) handleMessage(
 
 	protoMsg := proto.Clone(templateProtoMsg)
 	if err := proto.Unmarshal(event.Payload, protoMsg); err != nil {
-		unmarshalErr := ferr.NewInternalError(
-			err, fmt.Sprintf("failed to unmarshal payload of `%s`", event.ProtoName),
-		)
+		// The coordinates go into the error itself, not just the log fields:
+		// this error is reported once, by the caller, and whoever reads it in
+		// Sentry needs to know which offset to re-drive.
+		unmarshalErr := ferr.NewInternalError(err, fmt.Sprintf(
+			"failed to unmarshal payload of `%s` at %s/%d offset %d",
+			event.ProtoName, msg.Topic, msg.Partition, msg.Offset,
+		))
 
 		if errorMode == ShutdownOnError {
-			log.WithError(unmarshalErr).Error("Cannot unmarshal event, shutting down")
+			log.Error("Cannot unmarshal event, shutting down")
 			w.Shutdown()
 
 			return false, unmarshalErr
 		}
 
-		// A payload that cannot be parsed now will not become parsable later.
-		// Report it and move on rather than blocking the partition forever.
-		w.CaptureError(unmarshalErr, "dropping unparsable event")
-
+		// A payload that cannot be parsed now will not become parsable later,
+		// so commit and move on rather than blocking the partition forever.
+		// The error is returned rather than reported here: the worker loop
+		// reports whatever it gets back, and reporting in both places sent two
+		// Sentry events per message, doubling the volume during exactly the
+		// poison-message storm where the count matters.
 		return true, unmarshalErr
 	}
 

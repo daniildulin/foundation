@@ -144,6 +144,9 @@ func TestHandleMessageCommitsUnparsablePayload(t *testing.T) {
 	assert.True(t, shouldCommit)
 	require.NotNil(t, err)
 	assert.Contains(t, err.Error(), "failed to unmarshal payload")
+	// The offset has to travel with the error: it is reported once, by the
+	// caller, and whoever reads it needs to know what to re-drive.
+	assert.Contains(t, err.Error(), "foundation.errors/0 offset 42")
 	assert.Equal(t, 0, handler.calls)
 	assert.False(t, *shutdown)
 }
