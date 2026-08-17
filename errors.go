@@ -57,16 +57,28 @@ func (s *Service) Fatal(err error, msg string) {
 	s.Logger.Fatal(err)
 }
 
+// HandleError logs a Foundation error and, when it represents a fault rather
+// than a domain outcome, reports it to Sentry.
+//
+// It used to do neither unless the error was an *InternalError, so every other
+// Foundation error type — NotFound, InvalidArgument, PermissionDenied,
+// StaleObject — was discarded in silence. This is the only error handler the
+// spin worker has, which meant an events worker could fail to process every
+// message it received without producing a single line of output.
 func (s *Service) HandleError(err ferr.FoundationError, prefix string) {
-	// Log internal errors
+	if err == nil {
+		return
+	}
+
+	wrapped := wrapError(err, prefix)
+
+	s.Logger.Error(wrapped)
+
+	// Only internal errors go to Sentry. The others describe a caller's
+	// mistake or an expected domain outcome; alerting on them would bury the
+	// faults that do need attention.
 	var internalError *ferr.InternalError
 	if errors.As(err, &internalError) {
-		if prefix != "" {
-			s.Logger.Errorf("%s: %s", prefix, err.Error())
-		} else {
-			s.Logger.Error(err.Error())
-		}
-
-		sentry.CaptureException(err)
+		sentry.CaptureException(wrapped)
 	}
 }
