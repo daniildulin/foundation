@@ -62,13 +62,18 @@ func WithRequestLogger(l *log.Entry) func(http.Handler) http.Handler {
 				writer.Header().Set(fhttp.HeaderXRequestID, requestID)
 			}
 
-			// Add the logger to the request context
-			l = l.WithFields(log.Fields{
+			// Add the logger to the request context.
+			//
+			// N.B.: this MUST NOT assign back to `l` — that variable is
+			// captured by the closure and shared by every in-flight request,
+			// so reassigning it is a data race and leaks fields between
+			// concurrent requests.
+			reqLogger := l.WithFields(log.Fields{
 				"method":     request.Method,
 				"path":       request.URL.Path,
 				"request_id": requestID,
 			})
-			ctx := fctx.WithLogger(request.Context(), l)
+			ctx := fctx.WithLogger(request.Context(), reqLogger)
 			request = request.WithContext(ctx)
 
 			// Wrap the response writer with our logging response writer
@@ -79,12 +84,15 @@ func WithRequestLogger(l *log.Entry) func(http.Handler) http.Handler {
 			}
 
 			// Serve the request with the wrapped response writer
-			l.Infoln("Request started")
+			reqLogger.Infoln("Request started")
 			handler.ServeHTTP(w, request)
 
 			// Calculate the duration of the request
 			duration := time.Since(started)
-			l.WithField("duration_ms", duration.Milliseconds()).WithField("status", lrw.statusCode).Infoln("Request finished")
+			reqLogger.
+				WithField("duration_ms", duration.Milliseconds()).
+				WithField("status", lrw.statusCode).
+				Infoln("Request finished")
 		})
 	}
 }
