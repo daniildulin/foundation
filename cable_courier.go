@@ -58,6 +58,13 @@ type CableCourierOptions struct {
 func (opts *CableCourierOptions) EventHandlers(s *Service) map[proto.Message][]EventHandler {
 	handlers := make(map[proto.Message][]EventHandler)
 
+	// A courier constructed as &CableCourierOptions{} has a nil map, and the
+	// default error resolvers below used to be written straight into it:
+	// "assignment to entry in nil map".
+	if opts.Resolvers == nil {
+		opts.Resolvers = make(CableCourierResolvers)
+	}
+
 	errors := []proto.Message{
 		&ferrpb.InternalError{},
 		&ferrpb.UnauthenticatedError{},
@@ -91,10 +98,20 @@ func (opts *CableCourierOptions) EventHandlers(s *Service) map[proto.Message][]E
 	return handlers
 }
 
+// DefaultAnyCableRedisChannel is the Redis PubSub channel AnyCable listens on.
+const DefaultAnyCableRedisChannel = "__anycable__"
+
 // Start runs a cable_courier worker using the given CableCourierOptions.
 func (c *CableCourier) Start(opts *CableCourierOptions) {
-	if opts != nil && opts.RedisChannel == "" {
-		opts.RedisChannel = GetEnvOrString("ANYCABLE_REDIS_CHANNEL", "__anycable__")
+	// The nil check used to guard only the channel default, while
+	// opts.EventHandlers below was called unconditionally — so a nil opts
+	// produced a nil dereference two lines later instead of a clear error.
+	if opts == nil {
+		opts = &CableCourierOptions{}
+	}
+
+	if opts.RedisChannel == "" {
+		opts.RedisChannel = GetEnvOrString("ANYCABLE_REDIS_CHANNEL", DefaultAnyCableRedisChannel)
 	}
 
 	ewOpts := &EventsWorkerOptions{
@@ -131,6 +148,7 @@ func (h *CableMessageEventHandler) Handle(ctx context.Context, event *Event, msg
 	// Broadcast the message to the stream.
 	// If the broadcast fails, we log the error, capture it with Sentry and go on to avoid infinite loops.
 	err = cablecourier.NewClient(h.Service.GetRedis(), h.RedisChannel).BroadcastMessage(
+		ctx,
 		event.ProtoName,
 		msg,
 		stream,

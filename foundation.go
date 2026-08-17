@@ -27,6 +27,9 @@ const DefaultShutdownTimeout = 30 * time.Second
 // DefaultPort is the port server modes listen on when PORT is unset.
 const DefaultPort = 51051
 
+// DefaultRedisPoolSize is the pool size used when none is configured.
+const DefaultRedisPoolSize = 5
+
 // Service represents a single microservice - part of the bigger Foundation-based application, which implements
 // an isolated domain of the application logic.
 type Service struct {

@@ -6,7 +6,9 @@ import (
 	"time"
 
 	"github.com/gocraft/work"
+	"github.com/robfig/cron"
 
+	fctx "github.com/foundation-go/foundation/context"
 	"github.com/foundation-go/foundation/jobs"
 	fmetrics "github.com/foundation-go/foundation/metrics"
 )
@@ -15,7 +17,9 @@ const (
 	defaultConcurrency = 5
 )
 
-// jobsWorkerContext base context for workers to use
+// jobsWorkerContext is the per-job context gocraft/work instantiates. It stays
+// empty: everything a handler needs travels through the Go context instead, via
+// JobOptions.HandlerWithContext.
 type jobsWorkerContext struct {
 }
 
@@ -32,10 +36,25 @@ func InitJobsWorker(name string) *JobsWorker {
 }
 
 type JobOptions struct {
-	Handler  func(job *work.Job) error
+	// Handler runs the job. It receives no context, so it cannot be cancelled
+	// and cannot carry a trace; prefer HandlerWithContext.
+	Handler func(job *work.Job) error
+
+	// HandlerWithContext runs the job with a context that is cancelled when the
+	// service shuts down, and that carries the job's correlation ID.
+	//
+	// gocraft/work hands handlers nothing but the job, which left jobs outside
+	// everything the rest of the framework does with a context: no
+	// cancellation, no tracing, no correlation ID.
+	HandlerWithContext func(ctx context.Context, job *work.Job) error
+
 	Schedule string
 	Options  *work.JobOptions
 }
+
+// CorrelationIDArg is the job argument Foundation reads the correlation ID
+// from, so that work enqueued while handling a request stays attached to it.
+const CorrelationIDArg = "correlation_id"
 
 // JobsWorkerOptions represents the options for starting a jobs worker
 type JobsWorkerOptions struct {
@@ -70,10 +89,23 @@ func (w *JobsWorker) Start(opts *JobsWorkerOptions) {
 }
 
 func (w *JobsWorker) ServiceFunc(ctx context.Context) error {
+	// A JobsWorkerOptions built as a struct literal rather than through
+	// NewJobsWorkerOptions leaves Concurrency at zero, and a pool of zero
+	// workers processes nothing at all — silently.
+	if w.Options.Concurrency <= 0 {
+		w.Logger.Warnf("Concurrency is not set, defaulting to %d", defaultConcurrency)
+		w.Options.Concurrency = defaultConcurrency
+	}
+
+	if w.Options.Namespace == "" {
+		w.Options.Namespace = jobs.DefaultNamespace
+	}
+
 	redisPool, err := BuildRedisPool(w.Config.JobsEnqueuer.URL, w.Options.Concurrency)
 	if err != nil {
 		return fmt.Errorf("failed to build redis pool: %w", err)
 	}
+	defer redisPool.Close() //nolint:errcheck // best effort on shutdown
 
 	workerPool := work.NewWorkerPool(jobsWorkerContext{}, uint(w.Options.Concurrency), w.Options.Namespace, redisPool)
 
@@ -86,17 +118,22 @@ func (w *JobsWorker) ServiceFunc(ctx context.Context) error {
 	}
 
 	for jobName, jobOptions := range w.Options.Jobs {
-		if jobOptions.Handler == nil {
-			return fmt.Errorf("job %s has no handler", jobName)
+		handler, err := w.jobHandler(ctx, jobName, jobOptions)
+		if err != nil {
+			return err
 		}
 
 		if jobOptions.Options != nil {
-			workerPool.JobWithOptions(jobName, *jobOptions.Options, jobOptions.Handler)
+			workerPool.JobWithOptions(jobName, *jobOptions.Options, handler)
 		} else {
-			workerPool.Job(jobName, jobOptions.Handler)
+			workerPool.Job(jobName, handler)
 		}
 
 		if jobOptions.Schedule != "" {
+			if _, err := cron.Parse(jobOptions.Schedule); err != nil {
+				return fmt.Errorf("job %s has an invalid schedule %q: %w", jobName, jobOptions.Schedule, err)
+			}
+
 			workerPool.PeriodicallyEnqueue(jobOptions.Schedule, jobName)
 		}
 	}
@@ -108,6 +145,33 @@ func (w *JobsWorker) ServiceFunc(ctx context.Context) error {
 	workerPool.Stop()
 
 	return nil
+}
+
+// jobHandler resolves the handler for a job, adapting the context-aware form to
+// what gocraft/work expects.
+func (w *JobsWorker) jobHandler(ctx context.Context, name string, opts JobOptions) (func(*work.Job) error, error) {
+	switch {
+	case opts.HandlerWithContext != nil && opts.Handler != nil:
+		return nil, fmt.Errorf("job %s declares both Handler and HandlerWithContext; pick one", name)
+
+	case opts.HandlerWithContext != nil:
+		handler := opts.HandlerWithContext
+
+		return func(job *work.Job) error {
+			// The correlation ID travels as a job argument, so work enqueued
+			// while handling a request stays attached to it in the logs.
+			jobCtx := fctx.WithCorrelationID(ctx, job.ArgString(CorrelationIDArg))
+			jobCtx = fctx.WithLogger(jobCtx, w.Logger.WithField("job", job.Name))
+
+			return handler(jobCtx, job)
+		}, nil
+
+	case opts.Handler != nil:
+		return opts.Handler, nil
+
+	default:
+		return nil, fmt.Errorf("job %s has no handler", name)
+	}
 }
 
 // LoggingMiddleware logs and measures every job run.
