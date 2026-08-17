@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -35,7 +34,12 @@ type Component struct {
 	logger         *logrus.Entry
 	tracingEnabled bool
 
-	registerPoolStatsOnce sync.Once
+	// poolStats is registered on Start and unregistered on Stop, so that the
+	// gauges belong to the pool that is actually open. Registering once per
+	// process instead meant the first component ever started owned them
+	// forever: after it was stopped its collector kept reporting, from a closed
+	// pool, and any later component's numbers were invisible.
+	poolStats prometheus.Collector
 }
 
 // ComponentOption is an option to `PostgreSQLComponent`.
@@ -125,19 +129,45 @@ func (c *Component) Start() error {
 
 	c.Connection = pool
 
-	// Registering once per component: a second Start would otherwise fail on a
-	// duplicate collector, and there is nothing to be gained from that.
-	c.registerPoolStatsOnce.Do(func() {
-		if err := prometheus.Register(poolStatsCollector{component: c}); err != nil {
-			c.log().Warnf("Failed to register the connection pool collector: %v", err)
-		}
-	})
+	c.registerPoolStats()
 
 	return nil
 }
 
+// registerPoolStats exposes this pool's counters to Prometheus.
+func (c *Component) registerPoolStats() {
+	if c.poolStats != nil {
+		return
+	}
+
+	collector := poolStatsCollector{component: c}
+
+	if err := prometheus.Register(collector); err != nil {
+		// Another live component already owns the gauges. That is a
+		// misconfiguration — a service has one database pool — and the warning
+		// is more useful than a second set of numbers would be.
+		c.log().Warnf("Failed to register the connection pool collector: %v", err)
+
+		return
+	}
+
+	c.poolStats = collector
+}
+
+// unregisterPoolStats stops reporting this pool's counters.
+func (c *Component) unregisterPoolStats() {
+	if c.poolStats == nil {
+		return
+	}
+
+	prometheus.Unregister(c.poolStats)
+	c.poolStats = nil
+}
+
 // Stop implements the Component interface.
 func (c *Component) Stop() error {
+	c.unregisterPoolStats()
+
 	if c.Connection == nil {
 		return nil
 	}
@@ -145,6 +175,7 @@ func (c *Component) Stop() error {
 	c.log().Info("Disconnecting from PostgreSQL...")
 
 	c.Connection.Close()
+	c.Connection = nil
 
 	return nil
 }

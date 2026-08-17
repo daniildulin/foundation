@@ -40,6 +40,30 @@ jobs:
     - name: Coverage
       run: go tool cover -func=coverage.out | tail -1
 
+  # Integration tests live in their own module and drive real Postgres, Redis
+  # and Kafka containers. They are the only thing that can establish the
+  # properties the unit tests can only assume — that FOR UPDATE SKIP LOCKED
+  # really stops two couriers publishing the same event, that a consumer group's
+  # committed offset really advances past unhandled messages — so they are a
+  # required check, not a nightly one.
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+        cache: true
+        cache-dependency-path: |
+          go.sum
+          test/integration/go.sum
+
+    # testcontainers finds the Docker daemon the runner already provides.
+    - name: Integration tests
+      working-directory: test/integration
+      run: go test -tags=integration -timeout 20m ./...
+
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -59,3 +83,10 @@ jobs:
         # analysis differs between releases, so an unpinned or older binary
         # reports findings the tree was never checked for.
         version: v2.12.2
+
+    - name: Lint integration tests
+      uses: golangci/golangci-lint-action@v8
+      with:
+        version: v2.12.2
+        working-directory: test/integration
+        args: --build-tags=integration

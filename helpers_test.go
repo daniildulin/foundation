@@ -129,3 +129,11 @@ func TestGenerateRandomString(t *testing.T) {
 		assert.Contains(t, Alphabet, string(c))
 	}
 }
+
+// The Redis URL can carry a password, and an error message is a place it must
+// not appear.
+func TestRedactRedisURL(t *testing.T) {
+	assert.Equal(t, "redis://user:xxxxx@host:6379/3", redactRedisURL("redis://user:hunter2@host:6379/3"))
+	assert.Equal(t, "redis://host:6379", redactRedisURL("redis://host:6379"))
+	assert.Equal(t, "the configured Redis URL", redactRedisURL("://nonsense"))
+}

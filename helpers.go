@@ -2,6 +2,7 @@ package foundation
 
 import (
 	"fmt"
+	neturl "net/url"
 	"strings"
 	"time"
 
@@ -78,15 +79,45 @@ func BuildRedisPool(url string, poolSize int) (*redis.Pool, error) {
 		},
 	}
 
-	// Fail here rather than on the first command, so a malformed URL is a
-	// startup error with a clear cause.
+	// Fail here rather than on the first command, so a bad URL or a wrong
+	// address is a startup error with a clear cause.
+	//
+	// The probe issues a PING rather than only dialling: plenty of things
+	// accept a TCP connection without speaking Redis — a proxy, a mesh
+	// sidecar, the wrong port — and a dial that merely connects would call
+	// those healthy and leave the failure for the first real command.
 	conn, err := pool.Dial()
 	if err != nil {
 		_ = pool.Close() // nothing was borrowed
 
 		return nil, fmt.Errorf("failed to connect to Redis: %w", err)
 	}
+
+	_, err = conn.Do("PING")
 	_ = conn.Close() // returning the probe connection
 
+	if err != nil {
+		_ = pool.Close()
+
+		return nil, fmt.Errorf("connected to %s but it does not answer as Redis: %w", redactRedisURL(url), err)
+	}
+
 	return pool, nil
+}
+
+// redactRedisURL removes the password from a Redis URL so it can be logged or
+// returned in an error.
+func redactRedisURL(rawURL string) string {
+	parsed, err := neturl.Parse(rawURL)
+	if err != nil {
+		return "the configured Redis URL"
+	}
+
+	if parsed.User != nil {
+		if _, hasPassword := parsed.User.Password(); hasPassword {
+			parsed.User = neturl.UserPassword(parsed.User.Username(), "xxxxx")
+		}
+	}
+
+	return parsed.String()
 }

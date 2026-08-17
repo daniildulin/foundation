@@ -82,6 +82,21 @@ foundation new         # Create `--app` or `--service`
 
 You can also run `foundation` without any arguments to see a list of available commands, or run `foundation <command> --help` to see the available options for a specific command.
 
+## 🧪 Tests
+
+```bash
+make test              # unit suite, race detector on, no Docker needed
+make test-integration  # against real Postgres, Redis and Kafka in containers
+make lint
+```
+
+The [integration tests](./test/integration) verify what the unit tests can only
+assume: that `FOR UPDATE SKIP LOCKED` really keeps two outbox couriers from
+publishing the same event, that a consumer group's committed offset really
+advances past unhandled messages, that a Redis URL's database number is really
+honoured. They live in their own Go module so that testcontainers stays out of
+the framework's dependency graph.
+
 ## ⬆️ Upgrading
 
 Breaking changes and behaviour changes between releases are listed in
