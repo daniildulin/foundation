@@ -374,6 +374,14 @@ func (s *Service) StartComponents(opts ...StartComponentsOption) error {
 	return nil
 }
 
+// Shutdown asks the service to begin a graceful shutdown, as if it had received
+// SIGTERM. It is safe to call before Start and to call more than once.
+func (s *Service) Shutdown() {
+	if s.cancelFunc != nil {
+		s.cancelFunc()
+	}
+}
+
 // StopComponents stops the default Foundation service components.
 func (s *Service) StopComponents() {
 	s.Logger.Info("Stopping components:")

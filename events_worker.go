@@ -2,7 +2,9 @@ package foundation
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
@@ -144,77 +146,124 @@ func (w *EventsWorker) newProcessEventFunc(
 	return func(ctx context.Context) ferr.FoundationError {
 		msg, err := w.GetKafkaConsumer().FetchMessage(ctx)
 		if err != nil {
+			// A cancelled context is how a fetch ends during a normal
+			// shutdown, not a failure worth reporting.
+			if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) {
+				return nil
+			}
+
 			return ferr.NewInternalError(err, "failed to read message from Kafka")
 		}
 
-		event := newEventFromKafkaMessage(&msg)
+		shouldCommit, handleErr := w.handleMessage(ctx, msg, handlers, errorMode)
 
-		var handleErr ferr.FoundationError
-
-		// Enrich the context with the correlation ID of the incoming event, so
-		// that everything published while handling it — including the error
-		// event below — carries the same ID.
-		ctx = fctx.WithCorrelationID(ctx, event.Headers[fkafka.HeaderCorrelationID])
-
-		log := w.Logger.WithFields(map[string]interface{}{
-			"correlation_id": event.Headers[fkafka.HeaderCorrelationID],
-			"event":          event.ProtoName,
-		})
-		log.Info("Received event")
-
-		templateProtoMsg, ok := w.protoNamesToMessages[event.ProtoName]
-		if !ok {
-			log.Debugf("Skip event without handlers: `%s`", event.ProtoName)
-			return nil
-		}
-
-		// Add explicit handlers
-		protoMsg := proto.Clone(templateProtoMsg)
-		curHandlers := handlers[templateProtoMsg]
-		err = proto.Unmarshal(event.Payload, protoMsg)
-		if err != nil {
-			return ferr.NewInternalError(err, "failed to unmarshal event payload")
-		}
-
-		for _, handler := range curHandlers {
-			log := log.WithField("handler", fmt.Sprintf("%T", handler))
-			log.Info("Processing event")
-
-			handleErr = w.processEvent(ctx, handler, event, protoMsg)
-			if handleErr != nil {
-				log.WithError(handleErr).Errorf("Failed to process event `%s`", event.ProtoName)
-
-				// We publish the error event to the error topic for further delivery to the user via WebSocket.
-				if event.Headers[fkafka.HeaderOriginatorID] != "" {
-					err := w.NewAndPublishEvent(ctx, handleErr.MarshalProto(), event.Headers[fkafka.HeaderOriginatorID], nil, nil)
-					if err != nil {
-						return err
-					}
-				}
-
-				// We just stop all the subsequent handlers from processing the event if one of them failed.
-				//
-				// TODO: Consider adding a configuration option to allow the user to choose whether to stop after
-				// specific handler failed or not. It would require to add ability to return multiple errors from
-				// this function.
-				break
+		if shouldCommit {
+			if commitErr := w.CommitMessage(ctx, msg); commitErr != nil {
+				return commitErr
 			}
-
-			log.Info("Event processed successfully")
-		}
-
-		if handleErr != nil && errorMode == ShutdownOnError {
-			w.Logger.WithField("event", event.ProtoName).Errorf("Cannot process event: %v", handleErr)
-			w.cancelFunc()
-			return handleErr
-		}
-
-		if commitErr := w.CommitMessage(ctx, msg); commitErr != nil {
-			return commitErr
 		}
 
 		return handleErr
 	}
+}
+
+// handleMessage processes a single fetched Kafka message and reports whether
+// its offset should be committed.
+//
+// It is deliberately separate from fetching and committing so that the
+// decisions below can be tested without a broker.
+func (w *EventsWorker) handleMessage(
+	ctx context.Context,
+	msg kafka.Message,
+	handlers map[proto.Message][]EventHandler,
+	errorMode ErrorHandlingStrategy,
+) (bool, ferr.FoundationError) {
+	event := newEventFromKafkaMessage(&msg)
+
+	// Enrich the context with the correlation ID of the incoming event, so
+	// that everything published while handling it — including the error
+	// event below — carries the same ID.
+	ctx = fctx.WithCorrelationID(ctx, event.Headers[fkafka.HeaderCorrelationID])
+
+	log := w.Logger.WithFields(map[string]interface{}{
+		"correlation_id": event.Headers[fkafka.HeaderCorrelationID],
+		"event":          event.ProtoName,
+		"topic":          msg.Topic,
+		"partition":      msg.Partition,
+		"offset":         msg.Offset,
+	})
+	log.Info("Received event")
+
+	templateProtoMsg, ok := w.protoNamesToMessages[event.ProtoName]
+	if !ok {
+		// A worker subscribes to whole topics, so most of what it reads may be
+		// of types it does not handle. Those offsets still have to be
+		// committed: skipping the commit leaves the committed offset behind
+		// the read position, so the consumer lag grows without bound and every
+		// restart replays the tail of the topic.
+		log.Debugf("Skipping event without handlers: `%s`", event.ProtoName)
+
+		return true, nil
+	}
+
+	protoMsg := proto.Clone(templateProtoMsg)
+	if err := proto.Unmarshal(event.Payload, protoMsg); err != nil {
+		unmarshalErr := ferr.NewInternalError(
+			err, fmt.Sprintf("failed to unmarshal payload of `%s`", event.ProtoName),
+		)
+
+		if errorMode == ShutdownOnError {
+			log.WithError(unmarshalErr).Error("Cannot unmarshal event, shutting down")
+			w.Shutdown()
+
+			return false, unmarshalErr
+		}
+
+		// A payload that cannot be parsed now will not become parsable later.
+		// Report it and move on rather than blocking the partition forever.
+		w.CaptureError(unmarshalErr, "dropping unparsable event")
+
+		return true, unmarshalErr
+	}
+
+	var handleErr ferr.FoundationError
+
+	for _, handler := range handlers[templateProtoMsg] {
+		handlerLog := log.WithField("handler", fmt.Sprintf("%T", handler))
+		handlerLog.Info("Processing event")
+
+		handleErr = w.processEvent(ctx, handler, event, protoMsg)
+		if handleErr != nil {
+			handlerLog.WithError(handleErr).Errorf("Failed to process event `%s`", event.ProtoName)
+
+			// We publish the error event to the error topic for further delivery to the user via WebSocket.
+			if event.Headers[fkafka.HeaderOriginatorID] != "" {
+				if err := w.NewAndPublishEvent(
+					ctx, handleErr.MarshalProto(), event.Headers[fkafka.HeaderOriginatorID], nil, nil,
+				); err != nil {
+					return false, err
+				}
+			}
+
+			// We just stop all the subsequent handlers from processing the event if one of them failed.
+			//
+			// TODO: Consider adding a configuration option to allow the user to choose whether to stop after
+			// specific handler failed or not. It would require to add ability to return multiple errors from
+			// this function.
+			break
+		}
+
+		handlerLog.Info("Event processed successfully")
+	}
+
+	if handleErr != nil && errorMode == ShutdownOnError {
+		log.Errorf("Cannot process event: %v", handleErr)
+		w.Shutdown()
+
+		return false, handleErr
+	}
+
+	return true, handleErr
 }
 
 func (w *EventsWorker) processEvent(ctx context.Context, handler EventHandler, event *Event, msg proto.Message) ferr.FoundationError {
@@ -259,23 +308,42 @@ func (w *EventsWorker) processEvent(ctx context.Context, handler EventHandler, e
 	return nil
 }
 
-// CommitMessage tries to commit a Kafka message using the service's KafkaConsumer.
-// If the commit operation fails, it retries up to three times with a one-second pause between retries.
-// If all attempts fail, the function returns the last occurred error.
+const (
+	// commitMessageAttempts is how many times a Kafka offset commit is tried
+	// before giving up.
+	commitMessageAttempts = 3
+
+	// commitMessageBaseDelay is the first backoff step between commit attempts;
+	// it doubles on every retry.
+	commitMessageBaseDelay = 250 * time.Millisecond
+)
+
+// CommitMessage commits a Kafka message using the service's KafkaConsumer,
+// retrying a few times with exponential backoff. The wait between attempts is
+// interruptible, so a shutdown does not have to sit through it.
 func (s *Service) CommitMessage(ctx context.Context, msg kafka.Message) ferr.FoundationError {
-	// TODO: Make something clever here, like exponential backoff
-	for i := 0; i < 3; i++ {
-		err := s.GetKafkaConsumer().CommitMessages(ctx, msg)
-		if err == nil {
-			return nil
+	var lastErr error
+
+	for attempt := 0; attempt < commitMessageAttempts; attempt++ {
+		if attempt > 0 {
+			delay := commitMessageBaseDelay << (attempt - 1)
+
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ferr.NewInternalError(lastErr, "failed to commit message before shutdown")
+			case <-timer.C:
+			}
 		}
 
-		if i == 2 {
-			return ferr.NewInternalError(err, "failed to commit message")
+		if err := s.GetKafkaConsumer().CommitMessages(ctx, msg); err != nil {
+			lastErr = err
+			continue
 		}
 
-		time.Sleep(1 * time.Second)
+		return nil
 	}
 
-	return nil
+	return ferr.NewInternalError(lastErr, "failed to commit message")
 }
