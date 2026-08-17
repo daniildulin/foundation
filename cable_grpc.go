@@ -89,7 +89,8 @@ func (s *CableGRPC) ServiceFunc(ctx context.Context) error {
 	}()
 
 	<-ctx.Done()
-	server.GracefulStop()
+
+	s.stopGRPCServer(server)
 
 	return nil
 }

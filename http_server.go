@@ -3,7 +3,6 @@ package foundation
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 )
 
@@ -47,11 +46,8 @@ func (s *HTTPServer) Start(opts *HTTPServerOptions) {
 }
 
 func (s *HTTPServer) ServiceFunc(ctx context.Context) error {
-	port := GetEnvOrInt("PORT", 51051)
-	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", port),
-		Handler: s.Options.Handler,
-	}
+	port := GetEnvOrInt("PORT", DefaultPort)
+	server := s.newHTTPServer(port, s.Options.Handler)
 
 	s.Logger.Infof("Listening on http://0.0.0.0:%d", port)
 
@@ -64,7 +60,7 @@ func (s *HTTPServer) ServiceFunc(ctx context.Context) error {
 	<-ctx.Done()
 
 	// Gracefully stop the HTTP server
-	if err := server.Shutdown(context.Background()); err != nil {
+	if err := s.shutdownHTTPServer(server); err != nil {
 		s.CaptureError(err, "failed to gracefully shutdown HTTP server")
 	}
 

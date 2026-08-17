@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"time"
 
 	"google.golang.org/grpc"
 
@@ -97,14 +98,41 @@ func (s *GRPCServer) ServiceFunc(ctx context.Context) error {
 
 	<-ctx.Done()
 
-	// Gracefully stop the server
-	server.GracefulStop()
+	s.stopGRPCServer(server)
 
 	return nil
 }
 
+// stopGRPCServer stops a gRPC server gracefully, falling back to a hard stop
+// when in-flight calls do not finish within the shutdown budget.
+//
+// GracefulStop on its own waits forever: a single stuck streaming RPC used to
+// keep the process alive until the supervisor killed it.
+func (s *Service) stopGRPCServer(server *grpc.Server) {
+	stopped := make(chan struct{})
+
+	go func() {
+		defer close(stopped)
+
+		server.GracefulStop()
+	}()
+
+	timeout := s.shutdownTimeout()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case <-stopped:
+	case <-timer.C:
+		s.Logger.Warnf("gRPC server did not stop gracefully within %s; forcing it", timeout)
+		server.Stop()
+		<-stopped
+	}
+}
+
 func (s *Service) acquireListener() net.Listener {
-	port := GetEnvOrInt("PORT", 51051)
+	port := GetEnvOrInt("PORT", DefaultPort)
 	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
 	if err != nil {
 		s.Fatal(err, fmt.Sprintf("failed to listen on port %d", port))

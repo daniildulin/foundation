@@ -155,11 +155,8 @@ func (s *Gateway) ServiceFunc(ctx context.Context) error {
 		return fmt.Errorf("failed to register services: %w", err)
 	}
 
-	port := GetEnvOrInt("PORT", 51051)
-	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", port),
-		Handler: s.applyMiddleware(mux, s.Options),
-	}
+	port := GetEnvOrInt("PORT", DefaultPort)
+	server := s.newHTTPServer(port, s.applyMiddleware(mux, s.Options))
 
 	s.Logger.Infof("Listening on http://0.0.0.0:%d", port)
 
@@ -172,9 +169,8 @@ func (s *Gateway) ServiceFunc(ctx context.Context) error {
 	<-ctx.Done()
 
 	// Gracefully stop the HTTP server
-	if err := server.Shutdown(context.Background()); err != nil {
-		err = fmt.Errorf("failed to gracefully shutdown HTTP server: %w", err)
-		return err
+	if err := s.shutdownHTTPServer(server); err != nil {
+		return fmt.Errorf("failed to gracefully shutdown HTTP server: %w", err)
 	}
 
 	return nil

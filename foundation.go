@@ -23,6 +23,9 @@ const Version = "0.2.1"
 // before stopping its components.
 const DefaultShutdownTimeout = 30 * time.Second
 
+// DefaultPort is the port server modes listen on when PORT is unset.
+const DefaultPort = 51051
+
 // Service represents a single microservice - part of the bigger Foundation-based application, which implements
 // an isolated domain of the application logic.
 type Service struct {
@@ -50,6 +53,7 @@ type Config struct {
 	Redis        *RedisConfig
 	Sentry       *SentryConfig
 	JobsEnqueuer *JobsEnqueuerConfig
+	HTTP         *HTTPConfig
 
 	// ShutdownTimeout bounds how long the service spends draining work in
 	// flight before it stops its components. Set it comfortably below the
@@ -230,6 +234,7 @@ func NewConfig() *Config {
 			Pool:      GetEnvOrInt("REDIS_POOL", 5),
 			Namespace: GetEnvOrString("REDIS_NAMESPACE", ""),
 		},
+		HTTP:               NewHTTPConfig(),
 		ShutdownTimeout:    GetEnvOrDuration("SHUTDOWN_TIMEOUT", DefaultShutdownTimeout),
 		DrainDelay:         GetEnvOrDuration("DRAIN_DELAY", 0),
 		HealthCheckTimeout: GetEnvOrDuration("HEALTH_CHECK_TIMEOUT", DefaultHealthCheckTimeout),
